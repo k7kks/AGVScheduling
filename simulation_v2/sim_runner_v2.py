@@ -2293,6 +2293,7 @@ def main() -> int:
 
     publisher = sim.MQPublisher()
     bootstrap_map_wait_s = _resolve_bootstrap_map_wait_s()
+    pool_payload_template: Dict[str, Any] = dict(tasks_payload or {})
 
     if args.bootstrap:
         sim.send_map(publisher, map_path, str(args.map_version), int(args.map_id))
@@ -2422,6 +2423,9 @@ def main() -> int:
     next_trail_req = time.monotonic()
     next_assigned_path_req = time.monotonic()
     next_assigned_trail_req = time.monotonic()
+    pending_pool_dispatch_enabled = env_bool("SIM_PENDING_TASK_POOL_ENABLE", True)
+    pending_pool_dispatch_interval_s = max(1.0, _safe_float(env("SIM_PENDING_TASK_POOL_INTERVAL_SEC", "8.0"), 8.0))
+    next_pool_dispatch = time.monotonic() + pending_pool_dispatch_interval_s
     status_interval_s = max(0.0, float(args.status_interval))
     last_tick = time.monotonic()
     loop_rng = random.Random(int(args.seed) + 1000)
@@ -2459,44 +2463,44 @@ def main() -> int:
             last_tick = now
 
             # Loop task generator (keeps the system busy).
+            statuses = state.snapshot_status_by_id()
+            paths = state.snapshot_paths()
+            trails = state.snapshot_trails()
+            assigned_set = set(state.assigned_device_ids())
+            all_devices = sorted(statuses.keys())
+            idle_devices: List[str] = []
+            start_nodes: Dict[str, int] = {}
+            current_nodes: Set[int] = set()
+
+            def device_is_idle(device_id: str, st: Dict[str, Any]) -> bool:
+                # If the simulator believes this AGV still has assigned tasks/subtasks, do not
+                # generate new loop tasks or publish pending historical tasks for it.
+                if device_id in assigned_set:
+                    return False
+                next_dest = st.get("nextDestinationPoint")
+                if isinstance(next_dest, dict) and next_dest:
+                    if sim.parse_node_id(next_dest.get("nodeId")) is not None:
+                        return False
+                cur_node = sim.parse_node_id(st.get("nodeId"))
+                goal_node = None
+                if device_id in paths and paths[device_id]:
+                    goal_node = paths[device_id][-1].node_id
+                elif device_id in trails and trails[device_id]:
+                    goal_node = trails[device_id][-1].node_id
+                if goal_node is not None and cur_node is not None and cur_node != goal_node:
+                    return False
+                return True
+
+            for device_id, st in statuses.items():
+                nid = sim.parse_node_id(st.get("nodeId"))
+                if nid is not None:
+                    start_nodes[device_id] = nid
+                    current_nodes.add(int(nid))
+                if device_is_idle(device_id, st):
+                    idle_devices.append(device_id)
+            idle_devices.sort()
+
             if args.loop_tasks:
-                statuses = state.snapshot_status_by_id()
-                paths = state.snapshot_paths()
-                trails = state.snapshot_trails()
-                assigned_set = set(state.assigned_device_ids())
-                all_devices = sorted(statuses.keys())
-                idle_devices: List[str] = []
-                start_nodes: Dict[str, int] = {}
-                current_nodes: Set[int] = set()
-
-                def device_is_idle(device_id: str, st: Dict[str, Any]) -> bool:
-                    # If the simulator believes this AGV still has assigned tasks/subtasks, do not
-                    # generate new loop tasks even if route windows temporarily collapse to "idle".
-                    if device_id in assigned_set:
-                        return False
-                    next_dest = st.get("nextDestinationPoint")
-                    if isinstance(next_dest, dict) and next_dest:
-                        if sim.parse_node_id(next_dest.get("nodeId")) is not None:
-                            return False
-                    cur_node = sim.parse_node_id(st.get("nodeId"))
-                    goal_node = None
-                    if device_id in paths and paths[device_id]:
-                        goal_node = paths[device_id][-1].node_id
-                    elif device_id in trails and trails[device_id]:
-                        goal_node = trails[device_id][-1].node_id
-                    if goal_node is not None and cur_node is not None and cur_node != goal_node:
-                        return False
-                    return True
-
-                for device_id, st in statuses.items():
-                    nid = sim.parse_node_id(st.get("nodeId"))
-                    if nid is not None:
-                        start_nodes[device_id] = nid
-                        current_nodes.add(int(nid))
-                    if device_is_idle(device_id, st):
-                        idle_devices.append(device_id)
-                idle_devices.sort()
-
                 trigger_devices: List[str] = []
                 if args.loop_mode == "timer":
                     trigger_devices = all_devices
@@ -2557,6 +2561,30 @@ def main() -> int:
                         loop_deadline = now + loop_rng.uniform(min_delay, max_delay)
                 else:
                     loop_deadline = None
+
+            if pending_pool_dispatch_enabled and task_pool.size() > 0 and now >= next_pool_dispatch:
+                if idle_devices:
+                    occupied_by_node: Dict[int, str] = {}
+                    for device_id, nid in start_nodes.items():
+                        occupied_by_node[int(nid)] = device_id
+                    pool_payload = task_pool.build_payload(
+                        pool_payload_template,
+                        forbidden_end_nodes=current_nodes | map_forbidden_nodes,
+                        occupied_by_node=occupied_by_node,
+                        allocation_algo=args.alloc_algo or None,
+                    )
+                    pending_tasks = pool_payload.get("candidateTasks", [])
+                    if isinstance(pending_tasks, list) and pending_tasks:
+                        status_payload = state.snapshot_status_list() if attach_status else None
+                        sim.send_tasks(publisher, pool_payload, status_payload)
+                        state.set_tasks_payload(pool_payload)
+                        if recorder is not None:
+                            recorder.record_tasks_published(
+                                pool_payload,
+                                sim_time_s=state.sim_time_s(),
+                                source="pool",
+                            )
+                next_pool_dispatch = now + pending_pool_dispatch_interval_s
 
             refresh_ids: List[str] = []
             with path_refresh_lock:

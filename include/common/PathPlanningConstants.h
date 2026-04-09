@@ -14,6 +14,9 @@ inline constexpr double kUTurnPenaltyMultiplier = 2.0;
 inline constexpr double kDefaultPlannerSpeedMmPerSec = 1200.0;
 inline constexpr int kMinBridgeRegionNodes = 4;
 inline constexpr const char* kTurnPenaltyEnvKey = "PLANNER_TURN_PENALTY_MM";
+inline constexpr const char* kTurnPenaltyRetryRatioEnvKey = "PLANNER_TURN_PENALTY_RETRY_RATIO";
+inline constexpr const char* kTurnPenaltyLastResortEnvKey = "PLANNER_TURN_PENALTY_LAST_RESORT_MM";
+inline constexpr const char* kBridgeRegionMinNodesEnvKey = "CONGESTION_REGION_BRIDGE_MIN_NODES";
 
 inline double resolveTurnPenaltyMm() {
     if (const char* raw = std::getenv(kTurnPenaltyEnvKey)) {
@@ -24,6 +27,43 @@ inline double resolveTurnPenaltyMm() {
         }
     }
     return kDefaultTurnPenaltyMm;
+}
+
+inline double resolveTurnPenaltyRetryRatio() {
+    if (const char* raw = std::getenv(kTurnPenaltyRetryRatioEnvKey)) {
+        char* end = nullptr;
+        const double value = std::strtod(raw, &end);
+        if (end != raw && std::isfinite(value) && value >= 0.0) {
+            return value;
+        }
+    }
+    return 1.0 / 3.0;
+}
+
+inline double resolveTurnPenaltyRetryMm() {
+    return resolveTurnPenaltyMm() * resolveTurnPenaltyRetryRatio();
+}
+
+inline double resolveTurnPenaltyLastResortMm() {
+    if (const char* raw = std::getenv(kTurnPenaltyLastResortEnvKey)) {
+        char* end = nullptr;
+        const double value = std::strtod(raw, &end);
+        if (end != raw && std::isfinite(value) && value >= 0.0) {
+            return value;
+        }
+    }
+    return 0.0;
+}
+
+inline int resolveBridgeRegionMinNodes() {
+    if (const char* raw = std::getenv(kBridgeRegionMinNodesEnvKey)) {
+        char* end = nullptr;
+        const long value = std::strtol(raw, &end, 10);
+        if (end != raw && value >= 1) {
+            return static_cast<int>(value);
+        }
+    }
+    return kMinBridgeRegionNodes;
 }
 
 inline double resolvePlannerSpeedMmPerSec(double preferredMmPerSec) {

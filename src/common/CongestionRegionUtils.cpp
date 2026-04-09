@@ -187,7 +187,7 @@ void collectBridgeRegionGroups(const MapInfo& mapInfo,
         auto& merged = kv.second;
         std::sort(merged.begin(), merged.end());
         merged.erase(std::unique(merged.begin(), merged.end()), merged.end());
-        if (static_cast<int>(merged.size()) < PathPlanningConstants::kMinBridgeRegionNodes) {
+        if (static_cast<int>(merged.size()) < PathPlanningConstants::resolveBridgeRegionMinNodes()) {
             continue;
         }
         orderedGroups.push_back({merged.front(), std::move(merged)});

@@ -671,6 +671,8 @@ std::vector<int> GlobalPathPlanner::aStarSearch(int start, int end, const Static
     
     // 策略1: 标准A*搜索（转弯惩罚3000mm）
     const double defaultTurnPenaltyMm = PathPlanningConstants::resolveTurnPenaltyMm();
+    const double retryTurnPenaltyMm = PathPlanningConstants::resolveTurnPenaltyRetryMm();
+    const double lastResortTurnPenaltyMm = PathPlanningConstants::resolveTurnPenaltyLastResortMm();
     auto result = aStarPlanner_->findPath(start, end, defaultTurnPenaltyMm, bannedPtr, bannedEdgesPtr);
     if (result.found) {
         path = result.path;
@@ -681,7 +683,7 @@ std::vector<int> GlobalPathPlanner::aStarSearch(int start, int end, const Static
     
     // 策略2: 如果失败，减小转弯惩罚重试（允许更多转弯）
     if (path.empty()) {
-        result = aStarPlanner_->findPath(start, end, defaultTurnPenaltyMm / 3.0, bannedPtr, bannedEdgesPtr);
+        result = aStarPlanner_->findPath(start, end, retryTurnPenaltyMm, bannedPtr, bannedEdgesPtr);
         if (result.found) {
             path = result.path;
             if (config_.verboseLogging && astar_success_logging_enabled()) {
@@ -692,7 +694,7 @@ std::vector<int> GlobalPathPlanner::aStarSearch(int start, int end, const Static
     
     // 策略3: 如果还失败，完全取消转弯惩罚
     if (path.empty()) {
-        result = aStarPlanner_->findPath(start, end, 0.0, bannedPtr, bannedEdgesPtr);
+        result = aStarPlanner_->findPath(start, end, lastResortTurnPenaltyMm, bannedPtr, bannedEdgesPtr);
         if (result.found) {
             path = result.path;
             if (config_.verboseLogging && astar_success_logging_enabled()) {
@@ -714,9 +716,9 @@ std::vector<int> GlobalPathPlanner::aStarSearch(int start, int end, const Static
                 if (midEnd == start || midEnd == end || midEnd == midStart) continue;
                 if (bannedPtr && bannedPtr->count(midEnd)) continue;
                 
-                auto seg1 = aStarPlanner_->findPath(start, midStart, 0.0, bannedPtr, bannedEdgesPtr);
-                auto seg2 = aStarPlanner_->findPath(midStart, midEnd, 0.0, bannedPtr, bannedEdgesPtr);
-                auto seg3 = aStarPlanner_->findPath(midEnd, end, 0.0, bannedPtr, bannedEdgesPtr);
+                auto seg1 = aStarPlanner_->findPath(start, midStart, lastResortTurnPenaltyMm, bannedPtr, bannedEdgesPtr);
+                auto seg2 = aStarPlanner_->findPath(midStart, midEnd, lastResortTurnPenaltyMm, bannedPtr, bannedEdgesPtr);
+                auto seg3 = aStarPlanner_->findPath(midEnd, end, lastResortTurnPenaltyMm, bannedPtr, bannedEdgesPtr);
                 
                 if (seg1.found && seg2.found && seg3.found) {
                     // 拼接路径
@@ -747,8 +749,8 @@ std::vector<int> GlobalPathPlanner::aStarSearch(int start, int end, const Static
             if (candidate == start || candidate == end) continue;
             if (bannedPtr && bannedPtr->count(candidate)) continue;
             
-            auto seg1 = aStarPlanner_->findPath(start, candidate, 0.0, bannedPtr, bannedEdgesPtr);
-            auto seg2 = aStarPlanner_->findPath(candidate, end, 0.0, bannedPtr, bannedEdgesPtr);
+            auto seg1 = aStarPlanner_->findPath(start, candidate, lastResortTurnPenaltyMm, bannedPtr, bannedEdgesPtr);
+            auto seg2 = aStarPlanner_->findPath(candidate, end, lastResortTurnPenaltyMm, bannedPtr, bannedEdgesPtr);
             
             if (seg1.found && seg2.found) {
                 path = seg1.path;

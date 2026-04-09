@@ -417,8 +417,6 @@ def main() -> int:
     elif args.task_order == "latest":
         tasks.sort(key=task_sort_key, reverse=True)
     else:
-        import random
-
         rng = random.Random(int(args.seed))
         rng.shuffle(tasks)
 
