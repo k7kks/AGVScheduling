@@ -1,0 +1,110 @@
+{
+  "schedulingRequestId": "REQ_20251222_000000",
+  "requestTimestamp": "2025-12-22T00:00:00.000Z",
+  "requestType": "单个",
+  "taskNumber": 1,
+  "triggerContext": {
+    "type": "AGV空闲触发"
+  },
+  "triggerAgvId": [
+    "eecb470c19fbb2b2",
+    "211"
+  ],
+  "batchConfig": {
+    "maxBatchSize": 50
+  },
+  "timeoutMs": 2000,
+  "environmentContext": {
+    "mapVersion": "1",
+    "systemLoad": 7,
+    "systemLoadFactor": 0.49
+  },
+  "candidateTasks": [
+    {
+      "taskId": "26_211_211",
+      "priority": 5,
+      "expectedStartTime": "2025-12-22T00:00:00.000000+00:00Z",
+      "expectedCompletionTime": "2025-12-22T00:00:05.000000+00:00Z",
+      "minBatteryLevel": 0,
+      "subTasks": [
+        {
+          "sequence": 1,
+          "pointType": "PICKUP",
+          "location": "NODE23",
+          "point": {
+            "x": 0,
+            "y": 0,
+            "angle": 0,
+            "nodeId": "23"
+          },
+          "estimatedDuration": 0,
+          "pathConstraints": [],
+          "maxSpeed": 1000,
+          "subTaskId": "ab9e2370-6b9b-44ec-a23e-16bba1d224f5"
+        },
+        {
+          "sequence": 2,
+          "pointType": "DROPOFF",
+          "location": "NODE21",
+          "point": {
+            "x": 0,
+            "y": 0,
+            "angle": 0,
+            "nodeId": "21"
+          },
+          "estimatedDuration": 0,
+          "pathConstraints": [],
+          "maxSpeed": 1000,
+          "subTaskId": "bc52dcc0-7a8f-49ed-a81e-f2f8542d294c"
+        }
+      ],
+      "agvRequirements": []
+    }
+  ],
+  "agvStatusList": [
+    {
+      "deviceId": "eecb470c19fbb2b2",
+      "mapId": 1,
+      "curArea": "",
+      "connection": true,
+      "x": 3451,
+      "y": 7911,
+      "angle": 179,
+      "speed": 0,
+      "nodeId": "",
+      "nextDestinationPoint": {},
+      "curTrailPoints": [],
+      "taskId": "",
+      "taskStatus": 0,
+      "taskProgress": -1,
+      "estimatedDuration": 0,
+      "batteryLevel": 80,
+      "endurance": 150,
+      "load": false,
+      "errorCode": 0,
+      "updateTime": 0
+    },
+    {
+      "deviceId": "211",
+      "mapId": 1,
+      "curArea": "",
+      "connection": true,
+      "x": 441,
+      "y": 6401,
+      "angle": 0,
+      "speed": 0,
+      "nodeId": "",
+      "nextDestinationPoint": {},
+      "curTrailPoints": [],
+      "taskId": "",
+      "taskStatus": 0,
+      "taskProgress": -1,
+      "estimatedDuration": 0,
+      "batteryLevel": 80,
+      "endurance": 150,
+      "load": false,
+      "errorCode": 0,
+      "updateTime": 0
+    }
+  ]
+}

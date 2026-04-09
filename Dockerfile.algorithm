@@ -1,0 +1,32 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Asia/Shanghai
+
+# 设置工作目录
+WORKDIR /home/agv_cluster_scheduling_intergration
+
+# 安装必要工具
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        librabbitmq4 \
+        libssl3 \
+        ca-certificates \
+        tzdata && \
+    ln -snf /usr/share/zoneinfo/${TZ} /etc/localtime && \
+    echo "${TZ}" > /etc/timezone && \
+    rm -rf /var/lib/apt/lists/*
+
+# 创建 debug 文件夹
+RUN mkdir -p /home/agv_cluster_scheduling_intergration/debug
+
+# 复制 build/、config/、script/ 目录
+COPY build/ /home/agv_cluster_scheduling_intergration/build/
+COPY config/ /home/agv_cluster_scheduling_intergration/config/
+COPY script/ /home/agv_cluster_scheduling_intergration/script/
+
+# 暴露端口
+EXPOSE 8090
+
+# 启动命令
+CMD ["bash", "/home/agv_cluster_scheduling_intergration/script/start.sh"]

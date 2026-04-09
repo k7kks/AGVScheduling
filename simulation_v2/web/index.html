@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CRCS-V1.0调度系统 - 在线仿真演示平台</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+        background: #1a1a2e;
+        color: #fff;
+        overflow: hidden;
+      }
+
+      #app {
+        display: flex;
+        height: 100vh;
+      }
+
+      #sidebar {
+        width: 340px;
+        background: #16213e;
+        display: flex;
+        flex-direction: column;
+        box-shadow: 2px 0 20px rgba(0, 0, 0, 0.5);
+      }
+
+      #rightbar {
+        width: 300px;
+        background: #0f1523;
+        display: flex;
+        flex-direction: column;
+        border-left: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      #main-content {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        position: relative;
+      }
+
+      .header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 18px 16px;
+        text-align: center;
+      }
+
+      .header h1 {
+        font-size: 18px;
+        margin-bottom: 6px;
+      }
+
+      .header .subtitle {
+        font-size: 12px;
+        opacity: 0.9;
+      }
+
+      .controls {
+        padding: 14px 16px;
+        background: #0f1523;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .control-section {
+        margin-bottom: 12px;
+      }
+
+      .control-section h3 {
+        font-size: 12px;
+        margin-bottom: 8px;
+        color: #9ca3af;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+
+      .row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        font-size: 12px;
+        color: #d1d5db;
+      }
+
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #9ca3af;
+      }
+
+      .dot.ok {
+        background: #22c55e;
+      }
+
+      .dot.warn {
+        background: #f59e0b;
+      }
+
+      .dot.bad {
+        background: #ef4444;
+      }
+
+      .toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: #d1d5db;
+        user-select: none;
+      }
+
+      .toggle input {
+        accent-color: #667eea;
+      }
+
+      .btn {
+        padding: 10px 12px;
+        border: none;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all 0.2s;
+        background: #374151;
+        color: white;
+      }
+
+      .btn:hover {
+        background: #4b5563;
+      }
+
+      .btn-primary {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      }
+
+      .btn-primary:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.35);
+      }
+
+      .slider-group {
+        margin-top: 8px;
+      }
+
+      .slider-group label {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 12px;
+        color: #d1d5db;
+      }
+
+      .slider-group input[type="range"] {
+        width: 100%;
+        height: 6px;
+        border-radius: 3px;
+        background: #374151;
+        outline: none;
+        -webkit-appearance: none;
+      }
+
+      .slider-group input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: #667eea;
+        cursor: pointer;
+      }
+
+      .slider-group .value {
+        display: inline-block;
+        background: #374151;
+        padding: 3px 8px;
+        border-radius: 6px;
+        font-weight: 700;
+        margin-left: 8px;
+      }
+
+      .stats {
+        padding: 12px 16px;
+        background: #0f1523;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .stat-row {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 6px;
+        font-size: 12px;
+      }
+
+      .stat-row:last-child {
+        margin-bottom: 0;
+      }
+
+      .stat-label {
+        color: #9ca3af;
+      }
+
+      .stat-value {
+        color: #fff;
+        font-weight: 700;
+      }
+
+      .agv-list {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        padding: 12px 16px 16px 16px;
+      }
+
+      .agv-item {
+        padding: 10px 10px;
+        margin-bottom: 8px;
+        background: #0f1523;
+        border-radius: 10px;
+        border-left: 4px solid;
+        transition: all 0.15s;
+      }
+
+      .agv-item:hover {
+        background: #1a1f2e;
+        transform: translateX(2px);
+      }
+
+      .agv-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 6px;
+      }
+
+      .agv-id {
+        font-weight: 800;
+        font-size: 12px;
+      }
+
+      .agv-speed {
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .agv-meta {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        color: #9ca3af;
+      }
+
+      .panel {
+        margin: 14px 12px;
+        padding: 10px 12px;
+        background: #16213e;
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+      }
+
+      .panel summary {
+        list-style: none;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        font-weight: 800;
+        color: #e5e7eb;
+      }
+
+      .panel summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .panel summary::after {
+        content: "▾";
+        margin-left: auto;
+        font-size: 14px;
+        opacity: 0.7;
+        transition: transform 0.2s ease;
+      }
+
+      .panel:not([open]) summary::after {
+        transform: rotate(-90deg);
+      }
+
+      .panel-body {
+        margin-top: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .region-summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        font-size: 11px;
+        color: #9ca3af;
+      }
+
+      .region-summary .pill {
+        background: rgba(255, 255, 255, 0.08);
+        padding: 2px 8px;
+        border-radius: 999px;
+      }
+
+      .region-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        max-height: calc(100vh - 220px);
+        overflow-y: auto;
+        padding-right: 4px;
+      }
+
+      .region-item {
+        background: rgba(15, 21, 35, 0.9);
+        border-radius: 10px;
+        padding: 8px 10px;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+      }
+
+      .region-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .region-title {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .region-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #4b5563;
+      }
+
+      .region-meta {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11px;
+        color: #9ca3af;
+        margin-top: 4px;
+      }
+
+      #canvas-container {
+        position: absolute;
+        inset: 0;
+      }
+
+      #map-canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+        cursor: grab;
+        touch-action: none;
+        background: radial-gradient(circle at 30% 20%, rgba(102, 126, 234, 0.12), transparent 45%),
+          radial-gradient(circle at 80% 80%, rgba(118, 75, 162, 0.14), transparent 55%),
+          #0b1020;
+      }
+
+      #map-canvas.dragging {
+        cursor: grabbing;
+      }
+
+      #hint {
+        position: absolute;
+        left: 16px;
+        bottom: 14px;
+        background: rgba(15, 21, 35, 0.7);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        padding: 8px 10px;
+        border-radius: 10px;
+        font-size: 12px;
+        color: #d1d5db;
+        backdrop-filter: blur(6px);
+      }
+
+      code {
+        background: rgba(255, 255, 255, 0.08);
+        padding: 2px 6px;
+        border-radius: 6px;
+      }
+
+      @media (max-width: 1100px) {
+        #rightbar {
+          width: 240px;
+        }
+      }
+
+      @media (max-width: 980px) {
+        #rightbar {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="sidebar">
+        <div class="header">
+          <h1>CRCS-V1.0 调度系统</h1>
+          <div class="subtitle">在线仿真演示平台 (simulation_v2)</div>
+        </div>
+
+        <div class="controls">
+          <div class="control-section">
+            <h3>连接</h3>
+            <div class="row">
+              <div class="badge">
+                <div id="conn-dot" class="dot"></div>
+                <span id="conn-text">连接中...</span>
+              </div>
+              <button id="btn-fit" class="btn btn-primary">自适应视图</button>
+            </div>
+          </div>
+
+          <div class="control-section">
+            <h3>显示</h3>
+            <div class="row">
+              <label class="toggle"><input id="toggle-path" type="checkbox" checked />Path</label>
+              <label class="toggle"><input id="toggle-trail" type="checkbox" checked />Trail</label>
+              <label class="toggle"><input id="toggle-label" type="checkbox" checked />标签</label>
+              <label class="toggle"><input id="toggle-task" type="checkbox" checked />任务点</label>
+              <label class="toggle"><input id="toggle-nodes" type="checkbox" />节点</label>
+              <label class="toggle"><input id="toggle-node-ids" type="checkbox" />节点ID</label>
+              <label class="toggle"><input id="toggle-regions" type="checkbox" checked />区域</label>
+              <label class="toggle"><input id="toggle-reserved" type="checkbox" checked />预约节点</label>
+            </div>
+            <div class="slider-group">
+              <label>显示AGV数量 <span id="count-value" class="value">50</span></label>
+              <input id="count-slider" type="range" min="1" max="200" value="50" />
+            </div>
+          </div>
+
+          <div class="control-section">
+            <h3>刷新</h3>
+            <div class="slider-group">
+              <label>刷新周期 <span id="poll-value" class="value">120ms</span></label>
+              <input id="poll-slider" type="range" min="50" max="1000" step="10" value="120" />
+            </div>
+          </div>
+        </div>
+
+        <div class="stats">
+          <div class="stat-row"><span class="stat-label">仿真时间</span><span id="stat-sim" class="stat-value">-</span></div>
+          <div class="stat-row"><span class="stat-label">AGV数量</span><span id="stat-agv" class="stat-value">-</span></div>
+          <div class="stat-row"><span class="stat-label">接单AGV</span><span id="stat-assigned" class="stat-value">-</span></div>
+          <div class="stat-row"><span class="stat-label">地图</span><span id="stat-map" class="stat-value">-</span></div>
+          <div class="stat-row"><span class="stat-label">平均发布→执行</span><span id="stat-publish-start" class="stat-value">-</span></div>
+          <div class="stat-row"><span class="stat-label">完成距离</span><span id="stat-distance" class="stat-value">-</span></div>
+          <div class="stat-row"><span class="stat-label">平均吞吐</span><span id="stat-throughput" class="stat-value">-</span></div>
+        </div>
+
+        <div class="agv-list" id="agv-list"></div>
+      </div>
+
+      <div id="main-content">
+        <div id="canvas-container"><canvas id="map-canvas"></canvas></div>
+        <div id="hint">
+          鼠标拖拽平移，滚轮缩放；刷新从 <code>/state.json</code> 获取。
+        </div>
+      </div>
+
+      <div id="rightbar">
+        <details id="region-panel" class="panel" open>
+          <summary>区域统计</summary>
+          <div class="panel-body">
+            <div id="region-summary" class="region-summary"></div>
+            <div id="region-list" class="region-list"></div>
+          </div>
+        </details>
+      </div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

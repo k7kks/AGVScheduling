@@ -1,0 +1,27 @@
+version: "3.8"
+
+services:
+  # 核心业务服务
+  agv-algorithm:
+    build:
+      context: .
+      dockerfile: Dockerfile.algorithm
+    container_name: agv-algorithm
+    restart: always
+    ports:
+      - "8090:8090"
+    # volumes:
+    #   - ./logs/core:/app/logs
+    #   #- ./config-business:/app/config:ro
+    #   - ./maps:/app/maps
+    environment:
+      - TZ=Asia/Shanghai
+      - JAVA_OPTS=-Xms512m -Xmx2g
+    # depends_on:
+    #   - mysql
+    #   - redis
+    #   - rabbitmq
+    # networks:
+    #   - agv-network
+      
+

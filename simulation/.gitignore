@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+generated_status.json
+generated_tasks.json
+tmp_pos.png
+debug/

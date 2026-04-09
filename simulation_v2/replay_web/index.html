@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AGV 导演版回放</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Avenir Next", "PingFang SC", "Helvetica Neue", sans-serif;
+        color: #eef4ff;
+        background:
+          radial-gradient(circle at 20% 10%, rgba(69, 183, 209, 0.18), transparent 28%),
+          radial-gradient(circle at 85% 15%, rgba(255, 159, 67, 0.16), transparent 24%),
+          linear-gradient(160deg, #07111f 0%, #0b1628 55%, #08131d 100%);
+        min-height: 100vh;
+      }
+
+      #app {
+        display: grid;
+        grid-template-columns: 320px 1fr 340px;
+        gap: 16px;
+        height: 100vh;
+        padding: 16px;
+      }
+
+      .panel {
+        background: rgba(8, 18, 31, 0.82);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 18px;
+        backdrop-filter: blur(18px);
+        box-shadow: 0 24px 50px rgba(0, 0, 0, 0.28);
+      }
+
+      #sidebar,
+      #focusbar {
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      .section {
+        padding: 18px 18px 0 18px;
+      }
+
+      h1 {
+        margin: 0 0 8px 0;
+        font-size: 24px;
+        letter-spacing: 0.03em;
+      }
+
+      .subtitle {
+        color: #9bb1d0;
+        font-size: 13px;
+      }
+
+      .badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 14px;
+      }
+
+      .pill {
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        background: rgba(255, 255, 255, 0.08);
+        color: #dce7ff;
+      }
+
+      .control-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      .btn,
+      select {
+        width: 100%;
+        border: none;
+        border-radius: 12px;
+        padding: 10px 12px;
+        font-size: 13px;
+        font-weight: 700;
+        color: #eff5ff;
+        background: rgba(255, 255, 255, 0.08);
+        cursor: pointer;
+      }
+
+      .btn.primary {
+        background: linear-gradient(135deg, #2ec4b6 0%, #2b90d9 100%);
+        color: #031019;
+      }
+
+      .hint {
+        margin-top: 12px;
+        font-size: 12px;
+        line-height: 1.6;
+        color: #8ea7ca;
+      }
+
+      .toggle {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 12px;
+        font-size: 13px;
+        color: #c8d7ef;
+      }
+
+      .toggle input {
+        accent-color: #ff9f43;
+      }
+
+      .stats {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-top: 16px;
+      }
+
+      .stat {
+        padding: 12px;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.05);
+      }
+
+      .stat .label {
+        display: block;
+        font-size: 11px;
+        color: #8ea7ca;
+        margin-bottom: 6px;
+      }
+
+      .stat .value {
+        font-size: 18px;
+        font-weight: 800;
+      }
+
+      #event-list {
+        flex: 1;
+        overflow: auto;
+        padding: 14px 18px 18px 18px;
+      }
+
+      .event-item {
+        padding: 12px 14px;
+        margin-bottom: 10px;
+        border-radius: 14px;
+        cursor: default;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+      }
+
+      .event-item:hover {
+        transform: translateY(-1px);
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .event-item.active {
+        border-color: rgba(255, 159, 67, 0.75);
+        background: rgba(255, 159, 67, 0.14);
+      }
+
+      .event-time {
+        font-size: 11px;
+        color: #ffca8a;
+        margin-bottom: 6px;
+      }
+
+      .event-title {
+        font-size: 14px;
+        font-weight: 800;
+        margin-bottom: 6px;
+      }
+
+      .event-subtitle {
+        font-size: 12px;
+        color: #9bb1d0;
+        line-height: 1.5;
+      }
+
+      #stage {
+        position: relative;
+        overflow: hidden;
+      }
+
+      #main-canvas {
+        width: 100%;
+        height: calc(100vh - 112px);
+        display: block;
+        border-radius: 18px;
+        background:
+          radial-gradient(circle at 25% 20%, rgba(46, 196, 182, 0.14), transparent 30%),
+          radial-gradient(circle at 82% 82%, rgba(255, 159, 67, 0.14), transparent 34%),
+          #05101c;
+        cursor: grab;
+      }
+
+      #main-canvas.dragging {
+        cursor: grabbing;
+      }
+
+      #overlay {
+        position: absolute;
+        left: 22px;
+        top: 22px;
+        right: 22px;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        pointer-events: none;
+      }
+
+      #banner {
+        max-width: 560px;
+        padding: 14px 16px;
+        border-radius: 16px;
+        background: rgba(5, 13, 23, 0.78);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        backdrop-filter: blur(14px);
+      }
+
+      #banner .eyebrow {
+        font-size: 11px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: #ffca8a;
+        margin-bottom: 8px;
+      }
+
+      #banner .title {
+        font-size: 22px;
+        font-weight: 900;
+        margin-bottom: 6px;
+      }
+
+      #banner .desc {
+        font-size: 13px;
+        line-height: 1.6;
+        color: #c2d2ea;
+      }
+
+      #stage-badges {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        align-items: flex-end;
+      }
+
+      #speed-badge,
+      #camera-badge {
+        padding: 10px 14px;
+        border-radius: 14px;
+        font-size: 14px;
+        font-weight: 800;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        backdrop-filter: blur(12px);
+      }
+
+      #speed-badge {
+        background: rgba(46, 196, 182, 0.16);
+        border-color: rgba(46, 196, 182, 0.35);
+        color: #aef7ef;
+      }
+
+      #camera-badge {
+        background: rgba(255, 255, 255, 0.08);
+        color: #dbe7fa;
+      }
+
+      #transport {
+        position: absolute;
+        left: 18px;
+        right: 18px;
+        bottom: 18px;
+        padding: 14px 16px;
+        border-radius: 16px;
+        background: rgba(5, 13, 23, 0.82);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 14px;
+        align-items: center;
+      }
+
+      #timeline {
+        width: 100%;
+      }
+
+      #time-label {
+        min-width: 160px;
+        text-align: right;
+        color: #d4e2f7;
+        font-weight: 700;
+      }
+
+      #focusbar .section:last-child {
+        padding-bottom: 18px;
+      }
+
+      #focus-canvas {
+        width: calc(100% - 36px);
+        margin: 0 18px;
+        height: 280px;
+        border-radius: 16px;
+        display: block;
+        background:
+          radial-gradient(circle at 30% 20%, rgba(255, 159, 67, 0.14), transparent 28%),
+          #06101a;
+      }
+
+      #focus-title {
+        font-size: 18px;
+        font-weight: 900;
+      }
+
+      #focus-subtitle {
+        margin-top: 8px;
+        font-size: 13px;
+        line-height: 1.6;
+        color: #b4c7e4;
+      }
+
+      #focus-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 14px;
+      }
+
+      @media (max-width: 1280px) {
+        #app {
+          grid-template-columns: 300px 1fr;
+        }
+
+        #focusbar {
+          display: none;
+        }
+      }
+
+      @media (max-width: 960px) {
+        #app {
+          grid-template-columns: 1fr;
+          height: auto;
+        }
+
+        #sidebar {
+          order: 2;
+        }
+
+        #stage {
+          order: 1;
+        }
+
+        #main-canvas {
+          height: 72vh;
+        }
+
+        #overlay {
+          flex-direction: column;
+          gap: 12px;
+        }
+
+        #stage-badges {
+          align-items: flex-start;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <aside id="sidebar" class="panel">
+        <div class="section">
+          <h1>导演版回放</h1>
+          <div class="subtitle">自动快慢放、镜头缩放与重点高亮；仅支持顺序播放和倍速快进</div>
+          <div class="badges" id="top-badges"></div>
+
+          <div class="control-grid">
+            <button id="btn-play" class="btn primary">播放</button>
+            <button id="btn-reset" class="btn">回到开头</button>
+          </div>
+
+          <div class="control-grid">
+            <button id="btn-prev-event" class="btn" disabled>禁止跳章节</button>
+            <button id="btn-next-event" class="btn" disabled>禁止跳章节</button>
+          </div>
+
+          <div class="control-grid">
+            <button id="btn-zoom-out" class="btn">缩小</button>
+            <button id="btn-zoom-in" class="btn">放大</button>
+          </div>
+
+          <div class="control-grid">
+            <select id="speed-select">
+              <option value="1" selected>全局 1.0x</option>
+              <option value="1.25">全局 1.25x</option>
+              <option value="1.5">全局 1.5x</option>
+              <option value="2">全局 2.0x</option>
+              <option value="3">全局 3.0x</option>
+            </select>
+            <select id="display-select">
+              <option value="both" selected>Path + Trail</option>
+              <option value="path">仅 Path</option>
+              <option value="trail">仅 Trail</option>
+            </select>
+          </div>
+
+          <div class="control-grid">
+            <select id="follow-select">
+              <option value="">自动镜头</option>
+            </select>
+            <button id="btn-view-reset" class="btn">视角复位</button>
+          </div>
+
+          <div class="hint">主画面支持滚轮缩放、拖拽平移。空格播放/暂停；演示模式不支持拖动时间轴、步进和章节跳转。</div>
+
+          <label class="toggle"><span>自动导演</span><input id="toggle-director" type="checkbox" checked /></label>
+          <label class="toggle"><span>主视角自动镜头</span><input id="toggle-main-camera" type="checkbox" checked /></label>
+          <label class="toggle"><span>重点镜头跟随</span><input id="toggle-focus" type="checkbox" checked /></label>
+          <label class="toggle"><span>显示预约节点</span><input id="toggle-reserved" type="checkbox" checked /></label>
+          <label class="toggle"><span>重点高亮</span><input id="toggle-highlight" type="checkbox" checked /></label>
+
+          <div class="stats" id="stats"></div>
+        </div>
+        <div id="event-list"></div>
+      </aside>
+
+      <main id="stage" class="panel">
+        <canvas id="main-canvas"></canvas>
+        <div id="overlay">
+          <div id="banner">
+            <div class="eyebrow">Leader Demo Replay</div>
+            <div class="title" id="banner-title">加载中</div>
+            <div class="desc" id="banner-desc">正在读取回放数据。</div>
+          </div>
+          <div id="stage-badges">
+            <div id="speed-badge">1.0x</div>
+            <div id="camera-badge">主镜头 自动</div>
+          </div>
+        </div>
+        <div id="transport">
+          <button id="btn-step" class="btn" disabled>禁止跳播</button>
+          <input id="timeline" type="range" min="0" max="1" step="0.001" value="0" disabled />
+          <div id="time-label">0.0s / 0.0s</div>
+        </div>
+      </main>
+
+      <aside id="focusbar" class="panel">
+        <div class="section">
+          <div id="focus-title">重点镜头</div>
+          <div id="focus-subtitle">当前没有重点事件，右侧镜头会自动跟随导演脚本。</div>
+        </div>
+        <canvas id="focus-canvas"></canvas>
+        <div class="section">
+          <div id="focus-meta"></div>
+        </div>
+      </aside>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
