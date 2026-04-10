@@ -779,7 +779,13 @@ static std::vector<PathPlanningHelper::AmrPlanInfo> augment_with_path_planning(
     }
 
     if (!anyPlanned) {
-        std::cout << "ResultPublisher: no tasks assigned, nothing to plan.\n";
+        static auto lastNoTaskLog = std::chrono::steady_clock::time_point{};
+        const auto now = std::chrono::steady_clock::now();
+        if (lastNoTaskLog == std::chrono::steady_clock::time_point{} ||
+            (now - lastNoTaskLog) >= std::chrono::seconds(30)) {
+            std::cout << "ResultPublisher: no tasks assigned, nothing to plan.\n";
+            lastNoTaskLog = now;
+        }
     }
     return plans;
 }

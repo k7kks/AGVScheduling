@@ -245,6 +245,15 @@ struct PlanRuntimeState {
     std::chrono::steady_clock::time_point blockedByUpdatedAt{};
     std::chrono::steady_clock::time_point deadlockYieldUntil{};
     int deadlockCycleSize = 0;
+    // Escalating yield: track how many times each cycle pair has deadlocked recently
+    struct DeadlockPairRecord {
+        int count = 0;
+        std::chrono::steady_clock::time_point lastSeen{};
+    };
+    std::unordered_map<std::string, DeadlockPairRecord> deadlockPairHistory;
+    // Nodes to avoid after deadlock yield (the contested node that caused the deadlock)
+    std::set<int> deadlockAvoidNodes;
+    std::chrono::steady_clock::time_point deadlockAvoidUntil{};
     int tempGoalNodeId = -1;
     int lastFirstHopFromNodeId = -1;
     int lastFirstHopNodeId = -1;
@@ -6663,6 +6672,21 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
             }
         }
     }
+    // Deadlock avoid nodes: after a deadlock yield, ban the contested node(s) so the
+    // victim is forced to find a different route on the next SUPER replan.
+    if (stage == ReplanStage::SUPER &&
+        !rt.deadlockAvoidNodes.empty() &&
+        rt.deadlockAvoidUntil != std::chrono::steady_clock::time_point{} &&
+        now < rt.deadlockAvoidUntil) {
+        for (int avoidNode : rt.deadlockAvoidNodes) {
+            if (avoidNode != startNodeId && avoidNode != primaryGoal) {
+                congestion.hardBlocked.insert(avoidNode);
+            }
+        }
+    } else if (!rt.deadlockAvoidNodes.empty()) {
+        rt.deadlockAvoidNodes.clear();
+        rt.deadlockAvoidUntil = std::chrono::steady_clock::time_point{};
+    }
     std::unordered_set<int> congestionNodes = congestion.hardBlocked;
     congestionNodes.insert(congestion.hotNodes.begin(), congestion.hotNodes.end());
     const double tempLowScore = std::max(0.0, getenv_double("CONGESTION_TEMP_LOW_SCORE", 0.0));
@@ -7835,21 +7859,92 @@ static std::vector<DeadlockVictim> detect_deadlock_victims(
         add_cycle({a, b, c});
     }
 
+    // Non-cyclic stall detection: AGVs blocked for a long time by another AGV without
+    // forming a cycle. These AGVs (like AGV01, AGV26) would otherwise go unnoticed.
+    // Force a SUPER replan by creating a synthetic single-member "stall" victim.
+    const int stallMultiplier = std::max(1, getenv_int("DEADLOCK_STALL_MULTIPLIER", 3));
+    const int stallThresholdMs = detectMs * stallMultiplier;
+    if (stallThresholdMs > 0) {
+        for (const auto& kv : runtimeByDevice) {
+            const std::string& deviceId = kv.first;
+            const PlanRuntimeState& rt = kv.second;
+            if (covered.count(deviceId) > 0) continue;  // already in a cycle victim
+            if (rt.blockedByAgvId.empty()) continue;
+            if (rt.blockedBySince == std::chrono::steady_clock::time_point{}) continue;
+            const auto blockedDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - rt.blockedBySince).count();
+            if (blockedDuration < stallThresholdMs) continue;
+            // Check staleness
+            if (staleMs > 0 && rt.blockedByUpdatedAt != std::chrono::steady_clock::time_point{}) {
+                if ((now - rt.blockedByUpdatedAt) > std::chrono::milliseconds(staleMs)) continue;
+            }
+            // Check speed
+            auto stOpt = repo.getStatusById(deviceId);
+            if (!stOpt.has_value() || std::abs(stOpt->speed) > speedEps) continue;
+            // Check not already yielding
+            if (rt.deadlockYieldUntil != std::chrono::steady_clock::time_point{} &&
+                now < rt.deadlockYieldUntil) continue;
+            // Only stall AGVs with minimal reservations
+            if (rt.reservedNodes.size() > 1) continue;
+            const auto committed = repo.getLastSentRoute(deviceId);
+            if (committed.size() > 1) continue;
+
+            DeadlockVictim stall;
+            stall.deviceId = deviceId;
+            stall.cycleSize = 1;  // indicates stall, not cycle
+            stall.members = {deviceId, rt.blockedByAgvId};
+            covered.insert(deviceId);
+            victims.push_back(std::move(stall));
+            std::cout << log_time_prefix()
+                      << "[Stall] detected deviceId=" << deviceId
+                      << " blockedBy=" << rt.blockedByAgvId
+                      << " blockedMs=" << blockedDuration
+                      << std::endl;
+        }
+    }
+
     return victims;
 }
 
 static void apply_deadlock_victims(RobotDataRepository& repo,
                                    const std::vector<DeadlockVictim>& victims) {
     if (victims.empty()) return;
-    const int yieldMs = std::max(500, getenv_int("DEADLOCK_YIELD_MS", 3000));
-    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(yieldMs);
+    const int baseYieldMs = std::max(500, getenv_int("DEADLOCK_YIELD_MS", 3000));
+    const int maxYieldMs = std::max(baseYieldMs, getenv_int("DEADLOCK_YIELD_MAX_MS", 15000));
+    const int historyWindowMs = getenv_int("DEADLOCK_HISTORY_WINDOW_MS", 30000);
+    const auto now = std::chrono::steady_clock::now();
     for (const auto& victim : victims) {
         auto rt = repo.snapshotRuntimeState(victim.deviceId);
         const auto committed = repo.getLastSentRoute(victim.deviceId);
         if (committed.size() > 1 || rt.reservedNodes.size() > 1) {
             continue;
         }
-        rt.deadlockYieldUntil = until;
+        // Build sorted cycle key for history lookup
+        auto sortedMembers = victim.members;
+        std::sort(sortedMembers.begin(), sortedMembers.end());
+        std::string cycleKey;
+        for (size_t i = 0; i < sortedMembers.size(); ++i) {
+            if (i > 0) cycleKey += "|";
+            cycleKey += sortedMembers[i];
+        }
+        // Escalating yield: if same pair re-deadlocks within window, double yield time
+        int yieldMs = baseYieldMs;
+        auto& hist = rt.deadlockPairHistory[cycleKey];
+        if (hist.count > 0 &&
+            (now - hist.lastSeen) < std::chrono::milliseconds(historyWindowMs)) {
+            yieldMs = std::min(maxYieldMs,
+                               baseYieldMs * (1 << std::min(hist.count, 4)));
+        } else if (hist.count > 0) {
+            hist.count = 0;  // reset if outside window
+        }
+        hist.count++;
+        hist.lastSeen = now;
+        // Record contested node for avoidance during SUPER replan
+        if (rt.blockedByNodeId >= 0) {
+            rt.deadlockAvoidNodes.insert(rt.blockedByNodeId);
+            rt.deadlockAvoidUntil = now + std::chrono::milliseconds(yieldMs * 2);
+        }
+        rt.deadlockYieldUntil = now + std::chrono::milliseconds(yieldMs);
         rt.deadlockCycleSize = victim.cycleSize;
         repo.updateRuntimeState(victim.deviceId, rt.planPathId, rt);
         std::cout << log_time_prefix()
@@ -7857,6 +7952,7 @@ static void apply_deadlock_victims(RobotDataRepository& repo,
                   << " cycleSize=" << victim.cycleSize
                   << " members=" << join_string_list(victim.members)
                   << " yieldMs=" << yieldMs
+                  << " repeatCount=" << hist.count
                   << std::endl;
     }
 }
