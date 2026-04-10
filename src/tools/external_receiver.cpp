@@ -666,6 +666,9 @@ public:
         stored.blockedByUpdatedAt = state.blockedByUpdatedAt;
         stored.deadlockYieldUntil = state.deadlockYieldUntil;
         stored.deadlockCycleSize = state.deadlockCycleSize;
+        stored.deadlockPairHistory = state.deadlockPairHistory;
+        stored.deadlockAvoidNodes = state.deadlockAvoidNodes;
+        stored.deadlockAvoidUntil = state.deadlockAvoidUntil;
         stored.tempGoalNodeId = state.tempGoalNodeId;
         stored.lastFirstHopFromNodeId = state.lastFirstHopFromNodeId;
         stored.lastFirstHopNodeId = state.lastFirstHopNodeId;
@@ -7862,7 +7865,7 @@ static std::vector<DeadlockVictim> detect_deadlock_victims(
     // Non-cyclic stall detection: AGVs blocked for a long time by another AGV without
     // forming a cycle. These AGVs (like AGV01, AGV26) would otherwise go unnoticed.
     // Force a SUPER replan by creating a synthetic single-member "stall" victim.
-    const int stallMultiplier = std::max(1, getenv_int("DEADLOCK_STALL_MULTIPLIER", 3));
+    const int stallMultiplier = std::max(1, getenv_int("DEADLOCK_STALL_MULTIPLIER", 5));
     const int stallThresholdMs = detectMs * stallMultiplier;
     if (stallThresholdMs > 0) {
         for (const auto& kv : runtimeByDevice) {
