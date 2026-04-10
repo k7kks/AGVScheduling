@@ -235,9 +235,8 @@ static std::vector<std::vector<std::vector<double>>> generateCostMatrixImpl(
         if (maxGrid <= 0) maxGrid = getenv_int("CONGESTION_REGION_GRID_MAX", 6);
         if (grid <= 0) grid = auto_region_grid(amrNum, minGrid, maxGrid);
         int window = getenv_int("ALLOC_REGION_WINDOW", 0);
-        if (window <= 0) window = getenv_int("CONGESTION_REGION_WINDOW", 1);
-        if (window < 1) window = 1;
-        if (window % 2 == 0) window += 1;
+        if (window <= 0) window = getenv_int("CONGESTION_REGION_WINDOW", 2);
+        if (window < 0) window = 0;
         std::string mode = to_lower_ascii(getenv_str("ALLOC_REGION_MODE", ""));
         if (mode.empty()) mode = to_lower_ascii(getenv_str("CONGESTION_REGION_MODE", "graph"));
         bool useGraph = (mode == "graph" || mode == "cluster" || mode == "partition");
@@ -359,7 +358,7 @@ static std::vector<std::vector<std::vector<double>>> generateCostMatrixImpl(
                     }
                 }
 
-                int radius = window / 2;
+                int radius = window;
                 std::vector<int> windowCounts(regionCount, 0);
                 std::vector<int> windowSoft(regionCount, 0);
                 std::vector<int> windowHard(regionCount, 0);
@@ -532,7 +531,7 @@ static std::vector<std::vector<std::vector<double>>> generateCostMatrixImpl(
                 std::vector<int> windowCounts(static_cast<size_t>(grid * grid), 0);
                 std::vector<int> windowSoft(static_cast<size_t>(grid * grid), 0);
                 std::vector<int> windowHard(static_cast<size_t>(grid * grid), 0);
-                int half = window / 2;
+                int half = window;
                 for (int row = 0; row < grid; ++row) {
                     for (int col = 0; col < grid; ++col) {
                         int sumCount = 0;

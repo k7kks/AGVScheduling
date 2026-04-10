@@ -226,13 +226,25 @@ struct TargetPointEntry {
     std::string subTaskId;
     int subTaskSequence = -1;
     std::string stepType;
+    double serviceTimeSec = 0.0;
 };
 
 struct PlanRuntimeState {
     long long planPathId = 0;
     std::deque<TargetPointEntry> targets;
     std::vector<int> reservedNodes;
+    std::set<int> tempBlockedNodes;
+    std::set<std::pair<int,int>> tempBlockedEdges;
+    std::chrono::steady_clock::time_point tempBlockedUntil{};
     std::chrono::steady_clock::time_point blockedSince{};
+    std::string blockedByAgvId;
+    int blockedByNodeId = -1;
+    std::string blockedByReason;
+    std::string blockedByDetail;
+    std::chrono::steady_clock::time_point blockedBySince{};
+    std::chrono::steady_clock::time_point blockedByUpdatedAt{};
+    std::chrono::steady_clock::time_point deadlockYieldUntil{};
+    int deadlockCycleSize = 0;
     int tempGoalNodeId = -1;
     int lastFirstHopFromNodeId = -1;
     int lastFirstHopNodeId = -1;
@@ -385,7 +397,18 @@ public:
         if (existingRt != runtime_.end()) {
             // Preserve already-committed reserved window to avoid retracting control trail.
             rt.reservedNodes = existingRt->second.reservedNodes;
+            rt.tempBlockedNodes = existingRt->second.tempBlockedNodes;
+            rt.tempBlockedEdges = existingRt->second.tempBlockedEdges;
+            rt.tempBlockedUntil = existingRt->second.tempBlockedUntil;
             rt.blockedSince = existingRt->second.blockedSince;
+            rt.blockedByAgvId = existingRt->second.blockedByAgvId;
+            rt.blockedByNodeId = existingRt->second.blockedByNodeId;
+            rt.blockedByReason = existingRt->second.blockedByReason;
+            rt.blockedByDetail = existingRt->second.blockedByDetail;
+            rt.blockedBySince = existingRt->second.blockedBySince;
+            rt.blockedByUpdatedAt = existingRt->second.blockedByUpdatedAt;
+            rt.deadlockYieldUntil = existingRt->second.deadlockYieldUntil;
+            rt.deadlockCycleSize = existingRt->second.deadlockCycleSize;
             rt.tempGoalNodeId = existingRt->second.tempGoalNodeId;
             rt.lastFirstHopFromNodeId = existingRt->second.lastFirstHopFromNodeId;
             rt.lastFirstHopNodeId = existingRt->second.lastFirstHopNodeId;
@@ -414,6 +437,7 @@ public:
             tp.subTaskId = seg.subTaskId;
             tp.subTaskSequence = seg.subTaskSequence;
             tp.stepType = seg.stepType;
+            tp.serviceTimeSec = seg.serviceTimeSec;
             rt.targets.push_back(std::move(tp));
         }
         runtime_[agvId] = std::move(rt);
@@ -536,6 +560,18 @@ public:
         dynamicPlans_.erase(deviceId);
     }
 
+    std::vector<std::pair<std::string, PlanRuntimeState>> snapshotRuntimeStates() {
+        std::lock_guard<std::mutex> lk(mutex_);
+        std::vector<std::pair<std::string, PlanRuntimeState>> out;
+        out.reserve(runtime_.size());
+        for (auto& kv : runtime_) {
+            pruneExpiredTempObstacleLocked(kv.second);
+            pruneExpiredDeadlockStateLocked(kv.second);
+            out.emplace_back(kv.first, kv.second);
+        }
+        return out;
+    }
+
     std::vector<std::pair<std::string, PlanCacheEntry>> snapshotPlans() {
         std::lock_guard<std::mutex> lk(mutex_);
         std::vector<std::pair<std::string, PlanCacheEntry>> out;
@@ -585,10 +621,12 @@ public:
         return it->second.targets.front();
     }
 
-    PlanRuntimeState snapshotRuntimeState(const std::string& deviceId) const {
+    PlanRuntimeState snapshotRuntimeState(const std::string& deviceId) {
         std::lock_guard<std::mutex> lk(mutex_);
         auto it = runtime_.find(deviceId);
         if (it == runtime_.end()) return PlanRuntimeState{};
+        pruneExpiredTempObstacleLocked(it->second);
+        pruneExpiredDeadlockStateLocked(it->second);
         return it->second;
     }
 
@@ -607,7 +645,18 @@ public:
 	            return;
 	        }
         stored.reservedNodes = state.reservedNodes;
+        stored.tempBlockedNodes = state.tempBlockedNodes;
+        stored.tempBlockedEdges = state.tempBlockedEdges;
+        stored.tempBlockedUntil = state.tempBlockedUntil;
         stored.blockedSince = state.blockedSince;
+        stored.blockedByAgvId = state.blockedByAgvId;
+        stored.blockedByNodeId = state.blockedByNodeId;
+        stored.blockedByReason = state.blockedByReason;
+        stored.blockedByDetail = state.blockedByDetail;
+        stored.blockedBySince = state.blockedBySince;
+        stored.blockedByUpdatedAt = state.blockedByUpdatedAt;
+        stored.deadlockYieldUntil = state.deadlockYieldUntil;
+        stored.deadlockCycleSize = state.deadlockCycleSize;
         stored.tempGoalNodeId = state.tempGoalNodeId;
         stored.lastFirstHopFromNodeId = state.lastFirstHopFromNodeId;
         stored.lastFirstHopNodeId = state.lastFirstHopNodeId;
@@ -868,7 +917,18 @@ public:
         for (auto& kv : runtime_) {
             PlanRuntimeState& rt = kv.second;
             rt.reservedNodes.clear();
+            rt.tempBlockedNodes.clear();
+            rt.tempBlockedEdges.clear();
+            rt.tempBlockedUntil = std::chrono::steady_clock::time_point{};
             rt.blockedSince = std::chrono::steady_clock::time_point{};
+            rt.blockedByAgvId.clear();
+            rt.blockedByNodeId = -1;
+            rt.blockedByReason.clear();
+            rt.blockedByDetail.clear();
+            rt.blockedBySince = std::chrono::steady_clock::time_point{};
+            rt.blockedByUpdatedAt = std::chrono::steady_clock::time_point{};
+            rt.deadlockYieldUntil = std::chrono::steady_clock::time_point{};
+            rt.deadlockCycleSize = 0;
             rt.tempGoalNodeId = -1;
             rt.lastFirstHopFromNodeId = -1;
             rt.lastFirstHopNodeId = -1;
@@ -921,6 +981,22 @@ public:
                            std::unordered_map<std::string, TrafficPathRouteEntry>> trafficPathRoutes_;
 
     static constexpr size_t kMaxTrackedSubTasks = 64;
+
+    static void pruneExpiredTempObstacleLocked(PlanRuntimeState& rt) {
+        if (rt.tempBlockedUntil == std::chrono::steady_clock::time_point{}) return;
+        if (std::chrono::steady_clock::now() < rt.tempBlockedUntil) return;
+        rt.tempBlockedNodes.clear();
+        rt.tempBlockedEdges.clear();
+        rt.tempBlockedUntil = std::chrono::steady_clock::time_point{};
+    }
+
+    static void pruneExpiredDeadlockStateLocked(PlanRuntimeState& rt) {
+        if (rt.deadlockYieldUntil != std::chrono::steady_clock::time_point{} &&
+            std::chrono::steady_clock::now() >= rt.deadlockYieldUntil) {
+            rt.deadlockYieldUntil = std::chrono::steady_clock::time_point{};
+            rt.deadlockCycleSize = 0;
+        }
+    }
 
     void enforceSubTaskLimit(TrailProgressInfo& prog,
                              const std::string& protectedKey) {
@@ -1053,6 +1129,7 @@ static bool handle_map_info(const json& j,
                             const std::string& cachePath,
                             std::atomic<int>& mapId);
 static double reserve_near_conflict_threshold_mm();
+static std::vector<int> build_bridge_rule_node_ids(const MapInfo& mapInfo);
 
 struct MapRuntimeContext {
     explicit MapRuntimeContext(int initialMapId,
@@ -1080,6 +1157,7 @@ struct MapRuntimeContext {
 
     int mapId = 0;
     std::string mapVersion;
+    std::vector<int> bridgeRuleNodeIds;
     std::shared_mutex mapMutex;
     std::atomic<bool> mapReady;
     std::atomic<long long> mapEpoch;
@@ -1422,6 +1500,7 @@ static bool reload_context_map_payload(const json& j,
         ctx.aStarPtr = std::move(nextAStar);
         ctx.activeMapId.store(resolvedMapId);
         ctx.mapVersion = detect_map_version_from_message(j);
+        ctx.bridgeRuleNodeIds = build_bridge_rule_node_ids(*ctx.mapInfoPtr);
         ctx.mapReady.store(true);
         ctx.mapEpoch.fetch_add(1);
         if (!ctx.skipStaticTable) {
@@ -1443,6 +1522,14 @@ static void attach_map_metadata(ordered_json& body,
     body["mapId"] = ctx.activeMapId.load();
     if (!ctx.mapVersion.empty()) {
         body["mapVersion"] = ctx.mapVersion;
+    }
+    if (!ctx.bridgeRuleNodeIds.empty()) {
+        ordered_json bridgeNodes = ordered_json::array();
+        for (int nodeId : ctx.bridgeRuleNodeIds) {
+            bridgeNodes.push_back(nodeId);
+        }
+        body["bridgeNodeIds"] = std::move(bridgeNodes);
+        body["bridgeNodeSource"] = "rule";
     }
 }
 
@@ -2472,7 +2559,8 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
     bool allowLongerRoute,
     ReplanStage stage,
     bool* updatedOut,
-    bool* usedTempGoalOut = nullptr);
+    bool* usedTempGoalOut = nullptr,
+    const std::vector<int>* bridgeNodeIds = nullptr);
 
 static void processSchedulingMessage(
     json payload,
@@ -3832,6 +3920,16 @@ static std::string format_nodes_full(const std::vector<int>& nodes) {
     return oss.str();
 }
 
+static std::string join_string_list(const std::vector<std::string>& items) {
+    if (items.empty()) return "<empty>";
+    std::ostringstream oss;
+    for (size_t i = 0; i < items.size(); ++i) {
+        if (i > 0) oss << ",";
+        oss << items[i];
+    }
+    return oss.str();
+}
+
 static const char* hold_reason_label(NodeReservationTable::HoldReason reason) {
     switch (reason) {
         case NodeReservationTable::HoldReason::RESERVED_PATH: return "reserved_path";
@@ -4440,6 +4538,9 @@ static std::vector<int> build_route_from_plan(const PathPlanningHelper::AmrPlanI
 static int find_route_index_at_or_after(const std::vector<int>& route,
                                         int nodeId,
                                         size_t startIndex);
+static void trim_dynamic_plan_to_start(PathPlanningHelper::AmrPlanInfo& plan,
+                                       int startNodeId,
+                                       const MapInfo& mapInfo);
 
 static double compute_route_distance_mm_range(const MapInfo& mapInfo,
                                               const std::vector<int>& route,
@@ -4453,6 +4554,242 @@ static double compute_route_distance_mm_range(const MapInfo& mapInfo,
         dist += distance_mm_between_nodes(mapInfo, route[i], route[i + 1]);
     }
     return dist;
+}
+
+struct SoftTimeWindowEntry {
+    double enterSec = 0.0;
+    double leaveSec = 0.0;
+};
+
+static double edge_travel_time_sec(const MapInfo& mapInfo,
+                                   int fromNodeId,
+                                   int toNodeId,
+                                   double speedMmPerSec) {
+    if (!(speedMmPerSec > 0.0)) speedMmPerSec = 1000.0;
+    return distance_mm_between_nodes(mapInfo, fromNodeId, toNodeId) / speedMmPerSec;
+}
+
+static void normalize_route_to_current_node(std::vector<int>& route, int currentNodeId) {
+    if (route.empty() || currentNodeId < 0) return;
+    auto it = std::find(route.begin(), route.end(), currentNodeId);
+    if (it != route.end()) {
+        if (it != route.begin()) {
+            route.erase(route.begin(), it);
+        }
+    } else {
+        route.insert(route.begin(), currentNodeId);
+    }
+}
+
+static std::vector<double> build_route_arrival_times_sec(const MapInfo& mapInfo,
+                                                         const std::vector<int>& route,
+                                                         double speedMmPerSec) {
+    std::vector<double> out(route.size(), 0.0);
+    for (size_t i = 1; i < route.size(); ++i) {
+        out[i] = out[i - 1] + edge_travel_time_sec(mapInfo, route[i - 1], route[i], speedMmPerSec);
+    }
+    return out;
+}
+
+static bool point_to_segment_projection_ratio_mm(double px, double py,
+                                                 double x1, double y1,
+                                                 double x2, double y2,
+                                                 double& outRatio,
+                                                 double& outDist2) {
+    const double vx = x2 - x1;
+    const double vy = y2 - y1;
+    const double denom = vx * vx + vy * vy;
+    if (denom <= 1e-9) {
+        return false;
+    }
+
+    const double wx = px - x1;
+    const double wy = py - y1;
+    const double t = (wx * vx + wy * vy) / denom;
+    if (t < 0.0 || t > 1.0) {
+        return false;
+    }
+
+    const double projx = x1 + t * vx;
+    const double projy = y1 + t * vy;
+    const double dx = px - projx;
+    const double dy = py - projy;
+    outRatio = t;
+    outDist2 = dx * dx + dy * dy;
+    return true;
+}
+
+static double resolve_route_nominal_now_sec(const MapInfo& mapInfo,
+                                            const std::vector<int>& route,
+                                            const std::vector<double>& arrivalSec,
+                                            int currentNodeId,
+                                            const RobotStatusEntry* status,
+                                            double speedMmPerSec) {
+    if (route.empty() || arrivalSec.empty()) return 0.0;
+
+    const double projectionMaxMm = std::max(0.0, getenv_double("REPLAN_SOFT_TW_PROJECTION_MM", 2000.0));
+    const double projectionMaxSq = projectionMaxMm * projectionMaxMm;
+    if (status && route.size() >= 2) {
+        const auto& nodes = mapInfo.getNodes();
+        const auto& id2idx = mapInfo.getId2Index();
+        double bestDist2 = std::numeric_limits<double>::infinity();
+        double bestNominalSec = 0.0;
+        for (size_t i = 0; i + 1 < route.size(); ++i) {
+            auto itFrom = id2idx.find(route[i]);
+            auto itTo = id2idx.find(route[i + 1]);
+            if (itFrom == id2idx.end() || itTo == id2idx.end()) continue;
+            const Node& from = nodes[itFrom->second];
+            const Node& to = nodes[itTo->second];
+            double ratio = 0.0;
+            double dist2 = 0.0;
+            if (!point_to_segment_projection_ratio_mm(status->x, status->y,
+                                                      from.x, from.y,
+                                                      to.x, to.y,
+                                                      ratio, dist2)) {
+                continue;
+            }
+            if (dist2 < bestDist2) {
+                const double edgeSec = edge_travel_time_sec(mapInfo, route[i], route[i + 1], speedMmPerSec);
+                bestDist2 = dist2;
+                bestNominalSec = arrivalSec[i] + edgeSec * ratio;
+            }
+        }
+        if (std::isfinite(bestDist2) &&
+            (projectionMaxMm <= 0.0 || bestDist2 <= projectionMaxSq)) {
+            return bestNominalSec;
+        }
+    }
+
+    if (currentNodeId >= 0) {
+        int idx = find_route_index_at_or_after(route, currentNodeId, 0);
+        if (idx >= 0) {
+            return arrivalSec[static_cast<size_t>(idx)];
+        }
+    }
+
+    if (status) {
+        double bestDist2 = std::numeric_limits<double>::infinity();
+        size_t bestIdx = 0;
+        const auto& nodes = mapInfo.getNodes();
+        const auto& id2idx = mapInfo.getId2Index();
+        for (size_t i = 0; i < route.size(); ++i) {
+            auto it = id2idx.find(route[i]);
+            if (it == id2idx.end()) continue;
+            const Node& node = nodes[it->second];
+            const double dx = status->x - node.x;
+            const double dy = status->y - node.y;
+            const double dist2 = dx * dx + dy * dy;
+            if (dist2 < bestDist2) {
+                bestDist2 = dist2;
+                bestIdx = i;
+            }
+        }
+        if (std::isfinite(bestDist2)) {
+            return arrivalSec[bestIdx];
+        }
+    }
+    return arrivalSec.front();
+}
+
+static void append_soft_time_windows(
+    std::unordered_map<int, std::vector<SoftTimeWindowEntry>>& windowsByNode,
+    const MapInfo& mapInfo,
+    const std::vector<int>& rawRoute,
+    int currentNodeId,
+    const RobotStatusEntry* status,
+    double currentServiceSec,
+    double terminalServiceSec,
+    double speedMmPerSec) {
+    if (rawRoute.empty()) return;
+    std::vector<int> route = rawRoute;
+    normalize_route_to_current_node(route, currentNodeId);
+    if (route.empty()) return;
+
+    const double minWindowSec = std::max(0.0, getenv_double("REPLAN_SOFT_TW_MIN_WINDOW_SEC", 0.2));
+    const double horizonSec = std::max(0.0, getenv_double("REPLAN_SOFT_TW_HORIZON_SEC", 20.0));
+    auto arrivalSec = build_route_arrival_times_sec(mapInfo, route, speedMmPerSec);
+    const double nominalNowSec = resolve_route_nominal_now_sec(mapInfo, route, arrivalSec, currentNodeId, status, speedMmPerSec);
+
+    if (route.size() == 1) {
+        SoftTimeWindowEntry only;
+        only.enterSec = 0.0;
+        double dwellSec = std::max(minWindowSec, std::max(currentServiceSec, terminalServiceSec));
+        if (status && status->estimatedDurationSec > 0.0) {
+            dwellSec = std::max(dwellSec, status->estimatedDurationSec);
+        }
+        only.leaveSec = dwellSec;
+        windowsByNode[route.front()].push_back(only);
+        return;
+    }
+
+    for (size_t i = 0; i < route.size(); ++i) {
+        const double arrivalRelSec = arrivalSec[i] - nominalNowSec;
+        const double prevHalfSec =
+            (i > 0) ? edge_travel_time_sec(mapInfo, route[i - 1], route[i], speedMmPerSec) * 0.5 : 0.0;
+        const double nextHalfSec =
+            (i + 1 < route.size()) ? edge_travel_time_sec(mapInfo, route[i], route[i + 1], speedMmPerSec) * 0.5 : 0.0;
+        SoftTimeWindowEntry entry;
+        entry.enterSec = arrivalRelSec - prevHalfSec;
+        entry.leaveSec = arrivalRelSec + std::max(nextHalfSec, minWindowSec * 0.5);
+        if (i == 0) {
+            entry.leaveSec += std::max(0.0, currentServiceSec);
+        }
+        if (i + 1 == route.size()) {
+            entry.leaveSec += std::max(0.0, terminalServiceSec);
+        }
+        if (entry.leaveSec < -minWindowSec) continue;
+        if (horizonSec > 0.0 && entry.enterSec > horizonSec) break;
+        if (entry.leaveSec < entry.enterSec + minWindowSec) {
+            entry.leaveSec = entry.enterSec + minWindowSec;
+        }
+        windowsByNode[route[i]].push_back(entry);
+    }
+}
+
+static double compute_soft_time_window_penalty_mm(
+    const std::unordered_map<int, std::vector<SoftTimeWindowEntry>>& windowsByNode,
+    const MapInfo& mapInfo,
+    int prevNodeId,
+    int nodeId,
+    int goalNodeId,
+    double arrivalSec,
+    double goalServiceSec,
+    double speedMmPerSec) {
+    auto it = windowsByNode.find(nodeId);
+    if (it == windowsByNode.end() || !(speedMmPerSec > 0.0)) return 0.0;
+
+    const double minWindowSec = std::max(0.0, getenv_double("REPLAN_SOFT_TW_MIN_WINDOW_SEC", 0.2));
+    const double freeSec = std::max(0.0, getenv_double("REPLAN_SOFT_TW_FREE_SEC", 0.15));
+    const double maxPenaltySec =
+        std::max(0.0, getenv_double("REPLAN_SOFT_TW_MAX_PENALTY_MS", 1000.0)) / 1000.0;
+    const double capPenaltySec =
+        std::max(maxPenaltySec,
+                 std::max(0.0, getenv_double("REPLAN_SOFT_TW_CAP_MS", 2000.0)) / 1000.0);
+
+    const double edgeHalfSec =
+        (prevNodeId >= 0 && prevNodeId != nodeId)
+            ? edge_travel_time_sec(mapInfo, prevNodeId, nodeId, speedMmPerSec) * 0.5
+            : 0.0;
+    SoftTimeWindowEntry self;
+    self.enterSec = arrivalSec - std::max(minWindowSec * 0.5, edgeHalfSec);
+    self.leaveSec = arrivalSec + std::max(minWindowSec * 0.5, edgeHalfSec);
+    if (nodeId == goalNodeId && goalServiceSec > 0.0) {
+        self.leaveSec += goalServiceSec;
+    }
+
+    double totalPenaltySec = 0.0;
+    for (const auto& other : it->second) {
+        const double overlapSec =
+            std::min(self.leaveSec, other.leaveSec) - std::max(self.enterSec, other.enterSec);
+        if (overlapSec <= freeSec) continue;
+        const double selfSpan = std::max(minWindowSec, self.leaveSec - self.enterSec);
+        const double otherSpan = std::max(minWindowSec, other.leaveSec - other.enterSec);
+        const double normSec = std::max(minWindowSec, std::min(selfSpan, otherSpan));
+        const double ratio = std::clamp((overlapSec - freeSec) / normSec, 0.0, 1.0);
+        totalPenaltySec += maxPenaltySec * ratio * ratio;
+    }
+    if (totalPenaltySec <= 0.0) return 0.0;
+    return speedMmPerSec * std::min(totalPenaltySec, capPenaltySec);
 }
 
 static double estimate_goal_distance_mm(const MapInfo& mapInfo,
@@ -4519,36 +4856,33 @@ static bool point_to_segment_perp_distance_sq_mm_if_within(double px, double py,
                                                            double x1, double y1,
                                                            double x2, double y2,
                                                            double& outDist2) {
+    double ratio = 0.0;
     outDist2 = 0.0;
-    const double vx = x2 - x1;
-    const double vy = y2 - y1;
-    const double denom = vx * vx + vy * vy;
-    if (denom <= 1e-9) {
-        return false;
-    }
-
-    const double wx = px - x1;
-    const double wy = py - y1;
-    const double t = (wx * vx + wy * vy) / denom;
-
-    // 仅当投影点落在线段范围内才认为“阻挡该边”；
-    // 在线段延长线上（t<0 或 t>1）不计入边阻挡判定。
-    if (t < 0.0 || t > 1.0) {
-        return false;
-    }
-
-    const double projx = x1 + t * vx;
-    const double projy = y1 + t * vy;
-    const double dx = px - projx;
-    const double dy = py - projy;
-    outDist2 = dx * dx + dy * dy;
-    return true;
+    return point_to_segment_projection_ratio_mm(px, py, x1, y1, x2, y2, ratio, outDist2);
 }
 
 struct BlockedGraph {
     std::set<int> blockedNodes;
     std::set<std::pair<int,int>> blockedEdges;
 };
+
+static bool blocked_graph_intersects_route(const BlockedGraph& blocked,
+                                           const std::vector<int>& route) {
+    if (route.empty()) return false;
+    for (size_t i = 0; i < route.size(); ++i) {
+        const int nodeId = route[i];
+        if (blocked.blockedNodes.count(nodeId) > 0) {
+            return true;
+        }
+        if (i > 0) {
+            const int prevNodeId = route[i - 1];
+            if (blocked.blockedEdges.count({prevNodeId, nodeId}) > 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
 
 static BlockedGraph compute_blocked_graph_from_obstacles(
     const MapInfo& mapInfo,
@@ -4754,6 +5088,37 @@ static int build_graph_regions(const MapInfo& mapInfo,
         enableBridgeRegions);
 }
 
+static std::vector<int> build_bridge_rule_node_ids(const MapInfo& mapInfo) {
+    std::vector<int> out;
+    const bool enableBridgeRegions = getenv_int("CONGESTION_REGION_BRIDGE_ENABLE", 1) != 0;
+    if (!enableBridgeRegions) return out;
+
+    std::vector<int> regionByIndex;
+    std::vector<int> seedIndices;
+    std::vector<char> bridgeRegionMask;
+    int regionCount = build_graph_regions(mapInfo,
+                                          1,
+                                          regionByIndex,
+                                          seedIndices,
+                                          &bridgeRegionMask,
+                                          true);
+    if (regionCount <= 0 || regionByIndex.empty() || bridgeRegionMask.empty()) return out;
+
+    const auto& nodes = mapInfo.getNodes();
+    out.reserve(nodes.size());
+    for (size_t i = 0; i < nodes.size() && i < regionByIndex.size(); ++i) {
+        const Node& node = nodes[i];
+        if (!is_passable_region_node(node)) continue;
+        int reg = regionByIndex[i];
+        if (reg < 0 || reg >= static_cast<int>(bridgeRegionMask.size())) continue;
+        if (!bridgeRegionMask[static_cast<size_t>(reg)]) continue;
+        out.push_back(node.id);
+    }
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
 static RegionCongestionInfo build_region_congestion_info(
     const MapInfo& mapInfo,
     const std::vector<RobotStatusEntry>& statuses) {
@@ -4774,12 +5139,10 @@ static RegionCongestionInfo build_region_congestion_info(
     if (grid <= 0) grid = auto_region_grid(agvCount);
     if (grid <= 0) return info;
 
-    int window = getenv_int("CONGESTION_REGION_WINDOW", 3);
-    if (window < 1) window = 1;
-    if (window % 2 == 0) window += 1;
-    int bigWindow = getenv_int("CONGESTION_REGION_BIG_WINDOW", 3);
-    if (bigWindow < 1) bigWindow = 1;
-    if (bigWindow % 2 == 0) bigWindow += 1;
+    int window = getenv_int("CONGESTION_REGION_WINDOW", 2);
+    if (window < 0) window = 0;
+    int bigWindow = getenv_int("CONGESTION_REGION_BIG_WINDOW", 2);
+    if (bigWindow < 0) bigWindow = 0;
 
     std::string mode = to_lower_ascii(getenv_str("CONGESTION_REGION_MODE", "graph"));
     bool useGraph = (mode == "graph" || mode == "cluster" || mode == "partition");
@@ -4905,8 +5268,8 @@ static RegionCongestionInfo build_region_congestion_info(
             }
         }
 
-        int radius = window / 2;
-        int bigRadius = bigWindow / 2;
+        int radius = window;
+        int bigRadius = bigWindow;
         double bigRatio = getenv_double("CONGESTION_REGION_BIG_RATIO", 0.8);
         if (!(bigRatio > 0.0)) bigRatio = 0.8;
 
@@ -5091,7 +5454,7 @@ static RegionCongestionInfo build_region_congestion_info(
     std::vector<int> windowCounts(static_cast<size_t>(grid * grid), 0);
     std::vector<int> windowSoft(static_cast<size_t>(grid * grid), 0);
     std::vector<int> windowHard(static_cast<size_t>(grid * grid), 0);
-    const int half = window / 2;
+    const int half = window;
     for (int row = 0; row < grid; ++row) {
         for (int col = 0; col < grid; ++col) {
             int sumCount = 0;
@@ -5214,7 +5577,7 @@ static void merge_region_congestion(const RegionCongestionInfo& region,
     }
     // Region hard-block is extremely aggressive (can easily make paths "unreachable" in dense sims).
     // Keep it as a penalty by default; opt-in to hard obstacles via env.
-    if (env_enabled_default_true("CONGESTION_REGION_HARD_BLOCK")) {
+    if (env_enabled("CONGESTION_REGION_HARD_BLOCK")) {
         congestion.hardBlocked.insert(region.hardBlockedNodes.begin(), region.hardBlockedNodes.end());
     }
 }
@@ -5573,7 +5936,8 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
     bool allowLongerRoute,
     ReplanStage stage,
     bool* updatedOut,
-    bool* usedTempGoalOut) {
+    bool* usedTempGoalOut,
+    const std::vector<int>* bridgeNodeIds) {
     PathPlanningHelper::AmrPlanInfo out;
     out.amrId = deviceId;
     out.startNodeId = startNodeId;
@@ -5628,7 +5992,13 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
     maybe_release_stale_reservations(repo, reservations);
 
     PlanRuntimeState rt = repo.snapshotRuntimeState(deviceId);
-
+    const auto now = std::chrono::steady_clock::now();
+    if (rt.tempBlockedUntil != std::chrono::steady_clock::time_point{} &&
+        now >= rt.tempBlockedUntil) {
+        rt.tempBlockedNodes.clear();
+        rt.tempBlockedEdges.clear();
+        rt.tempBlockedUntil = std::chrono::steady_clock::time_point{};
+    }
     int trailReserveMin = std::max(1, getenv_int("TRAIL_MAX_POINTS", 10));
     if (reserveBudgetOverride <= 0) {
         reserveBudgetOverride = trailReserveMin;
@@ -5882,10 +6252,93 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
             bannedNodes.insert(nodeId);
         }
     }
+    std::unordered_set<int> tempBlockedNodes;
+    tempBlockedNodes.reserve(rt.tempBlockedNodes.size());
+    for (int nodeId : rt.tempBlockedNodes) {
+        tempBlockedNodes.insert(nodeId);
+        bannedNodes.insert(nodeId);
+        bannedNodesAll.insert(nodeId);
+    }
+    const std::set<std::pair<int,int>> tempBlockedEdges = rt.tempBlockedEdges;
+    struct SoftWindowStats {
+        size_t nodes = 0;
+        size_t windows = 0;
+    };
+    std::unordered_map<int, std::vector<SoftTimeWindowEntry>> softTimeWindows;
+    SoftWindowStats softWindowStats;
+    const bool enableSoftTimeWindow =
+        (stage == ReplanStage::FAST) && env_enabled("REPLAN_SOFT_TIME_WINDOW_ENABLE");
+    if (enableSoftTimeWindow) {
+        const int softRouteBudget = std::max(1, getenv_int("TRAIL_MAX_POINTS", 10));
+        double nominalSpeed = mapInfo.getGlobalMaxSpeed();
+        if (!(nominalSpeed > 0.0)) nominalSpeed = 1000.0;
+        auto planSnapshots = repo.snapshotPlans();
+        for (const auto& kv : planSnapshots) {
+            const std::string& otherDeviceId = kv.first;
+            const PlanCacheEntry& otherEntry = kv.second;
+            if (otherDeviceId.empty() || otherDeviceId == deviceId) continue;
+            if (otherEntry.plan.segments.empty()) continue;
+
+            auto otherStatusOpt = repo.getStatusById(otherDeviceId);
+            int otherCurrentNode = otherEntry.plan.startNodeId;
+            if (otherStatusOpt.has_value()) {
+                int resolvedNode = resolve_status_node_id(*otherStatusOpt, mapInfo);
+                if (resolvedNode >= 0) otherCurrentNode = resolvedNode;
+            }
+            if (otherCurrentNode < 0) continue;
+
+            PathPlanningHelper::AmrPlanInfo otherPlan = otherEntry.plan;
+            DynamicPlanCacheEntry otherDyn;
+            if (repo.getDynamicPlanEntry(otherDeviceId, otherEntry.pathId, softRouteBudget, otherDyn)) {
+                otherPlan = std::move(otherDyn.plan);
+            } else {
+                trim_dynamic_plan_to_start(otherPlan, otherCurrentNode, mapInfo);
+            }
+            auto otherRoute = build_route_from_plan(otherPlan);
+            if (otherRoute.empty()) continue;
+
+            double currentServiceSec = 0.0;
+            double terminalServiceSec = 0.0;
+            auto otherTargetOpt = repo.peekTarget(otherDeviceId);
+            if (otherTargetOpt.has_value() &&
+                otherRoute.back() == otherTargetOpt->nodeId) {
+                terminalServiceSec = std::max(terminalServiceSec, otherTargetOpt->serviceTimeSec);
+            }
+            if (otherStatusOpt.has_value() && otherStatusOpt->estimatedDurationSec > 0.0) {
+                bool onTaskNode = false;
+                if (otherTargetOpt.has_value() && otherCurrentNode == otherTargetOpt->nodeId) {
+                    onTaskNode = true;
+                } else if (!otherRoute.empty() && otherCurrentNode == otherRoute.front() &&
+                           otherRoute.size() == 1) {
+                    onTaskNode = true;
+                }
+                if (onTaskNode) {
+                    currentServiceSec = std::max(currentServiceSec, otherStatusOpt->estimatedDurationSec);
+                }
+            }
+            if (otherTargetOpt.has_value() &&
+                !otherRoute.empty() &&
+                otherCurrentNode == otherTargetOpt->nodeId) {
+                currentServiceSec = std::max(currentServiceSec, otherTargetOpt->serviceTimeSec);
+            }
+
+            append_soft_time_windows(softTimeWindows,
+                                     mapInfo,
+                                     otherRoute,
+                                     otherCurrentNode,
+                                     otherStatusOpt.has_value() ? &(*otherStatusOpt) : nullptr,
+                                     currentServiceSec,
+                                     terminalServiceSec,
+                                     nominalSpeed);
+        }
+        softWindowStats.nodes = softTimeWindows.size();
+        for (const auto& kv : softTimeWindows) {
+            softWindowStats.windows += kv.second.size();
+        }
+    }
 
     bool statusStaticNow = false;
     long long statusStaticMs = 0;
-    const auto now = std::chrono::steady_clock::now();
     const int firstHopCooldownMs = std::max(0, getenv_int("REPLAN_FIRST_HOP_COOLDOWN_MS", 2000));
     const bool firstHopEnabled = (getenv_int("REPLAN_FIRST_HOP_ENABLE", 0) != 0);
     const int firstHopWaitMs = std::max(0, getenv_int("REPLAN_FIRST_HOP_WAIT_MS", 0));
@@ -6192,6 +6645,24 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
         merge_region_congestion(region, congestion);
         mark_ms(profile.regionMs, t0);
     }
+    // Bridge reservation enforcement: if any bridge node is reserved by another AGV,
+    // ban ALL bridge nodes from planning. This prevents multiple AGVs from entering
+    // a bridge region simultaneously even when position-based counting shows 0 inside.
+    if (enableCongestionAvoid && bridgeNodeIds && !bridgeNodeIds->empty()) {
+        bool bridgeOccupied = false;
+        for (int bNodeId : *bridgeNodeIds) {
+            auto hold = reservations.findBlockingHold(bNodeId, deviceId);
+            if (hold.has_value()) {
+                bridgeOccupied = true;
+                break;
+            }
+        }
+        if (bridgeOccupied) {
+            for (int bNodeId : *bridgeNodeIds) {
+                congestion.hardBlocked.insert(bNodeId);
+            }
+        }
+    }
     std::unordered_set<int> congestionNodes = congestion.hardBlocked;
     congestionNodes.insert(congestion.hotNodes.begin(), congestion.hotNodes.end());
     const double tempLowScore = std::max(0.0, getenv_double("CONGESTION_TEMP_LOW_SCORE", 0.0));
@@ -6199,7 +6670,10 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
     const int fastHeldPenaltyMs = std::max(0, getenv_int("REPLAN_FAST_HELD_PENALTY_MS", 1000));
     std::unordered_map<int, double> fastHeldPenaltyScore;
     double fastHeldPenaltyMm = 0.0;
-    if (stage == ReplanStage::FAST && fastHeldPenaltyMs > 0 && !blockedVec.empty()) {
+    if (stage == ReplanStage::FAST &&
+        fastHeldPenaltyMs > 0 &&
+        !blockedVec.empty() &&
+        !enableSoftTimeWindow) {
         double speed = mapInfo.getGlobalMaxSpeed();
         if (!(speed > 0.0)) speed = 1000.0;
         fastHeldPenaltyMm = speed * (static_cast<double>(fastHeldPenaltyMs) / 1000.0);
@@ -6228,6 +6702,8 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
                   << " congHard=" << congestion.hardBlocked.size()
                   << " congHot=" << congestion.hotNodes.size()
                   << " regionHard=" << region.hardBlockedNodes.size()
+                  << " twNodes=" << softWindowStats.nodes
+                  << " twWindows=" << softWindowStats.windows
                   << " stuck=" << (stuckHere ? "1" : "0")
                   << std::endl;
     }
@@ -6257,8 +6733,12 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
         if (fromNodeId < 0 || goalNodeId < 0) return false;
         const std::unordered_set<int>* baseBanned = overrideBanned ? overrideBanned : &bannedNodes;
         std::unordered_set<int> localBanned;
-        const bool goalHeldByOther = (goalNodeId >= 0 && baseBanned && baseBanned->count(goalNodeId) > 0);
-        if (goalHeldByOther && goalNodeId != fromNodeId && (avoidHeldNodesInPlanning || overrideBanned)) {
+        const bool goalTempBlocked = (goalNodeId >= 0 && tempBlockedNodes.count(goalNodeId) > 0);
+        const bool goalHeldByOther =
+            (goalNodeId >= 0 && baseBanned && baseBanned->count(goalNodeId) > 0 && !goalTempBlocked);
+        if ((goalTempBlocked || goalHeldByOther) &&
+            goalNodeId != fromNodeId &&
+            (goalTempBlocked || avoidHeldNodesInPlanning || overrideBanned)) {
             return false;
         }
 	        std::vector<int> hardBlockedFiltered;
@@ -6272,7 +6752,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
 	        if (!localBanned.empty()) {
 	            localBanned.erase(fromNodeId);
             bool goalBlockedByRegion = false;
-            if (enableCongestionAvoid && region.valid() && !region.hardBlockedNodes.empty()) {
+	            if (enableCongestionAvoid && region.valid() && !region.hardBlockedNodes.empty()) {
                 int startCell = region.cellIndexForNode(mapInfo, fromNodeId);
                 int goalCell = region.cellIndexForNode(mapInfo, goalNodeId);
                 if (region.hardBlockedNodes.count(goalNodeId) > 0 &&
@@ -6280,16 +6760,51 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
                     goalBlockedByRegion = true;
                 }
             }
-            if (!goalBlockedByRegion && !goalHeldByOther) {
+            if (!goalBlockedByRegion && !goalHeldByOther && !goalTempBlocked) {
                 localBanned.erase(goalNodeId);
             }
         }
+            std::set<std::pair<int,int>> localBlockedEdges = tempBlockedEdges;
 	        const std::unordered_set<int>* bannedPtr = localBanned.empty() ? nullptr : &localBanned;
+            const std::set<std::pair<int,int>>* blockedEdgesPtr =
+                localBlockedEdges.empty() ? nullptr : &localBlockedEdges;
+        const double nominalSpeed = [&]() {
+            double speed = mapInfo.getGlobalMaxSpeed();
+            if (!(speed > 0.0)) speed = 1000.0;
+            return speed;
+        }();
+        double goalServiceSec = 0.0;
+        if (target.has_value() && goalNodeId == target->nodeId) {
+            goalServiceSec = std::max(0.0, target->serviceTimeSec);
+        }
+        AStarPathFinder::DynamicNodePenaltyFn dynamicPenaltyFn;
+        const bool useSoftTimePenalty =
+            enableSoftTimeWindow &&
+            !softTimeWindows.empty() &&
+            !avoidHeldNodesInPlanning &&
+            !overrideBanned;
+        if (useSoftTimePenalty) {
+            dynamicPenaltyFn =
+                [&](int prevNodeId, int nodeId, double arrivalCostMm) -> double {
+                    return compute_soft_time_window_penalty_mm(
+                        softTimeWindows,
+                        mapInfo,
+                        prevNodeId,
+                        nodeId,
+                        goalNodeId,
+                        arrivalCostMm / nominalSpeed,
+                        goalServiceSec,
+                        nominalSpeed);
+                };
+        }
 
-        if (!skipStaticTable && staticTableReady) {
+        if (!skipStaticTable && staticTableReady && !useSoftTimePenalty) {
             StaticPathTable::DynamicContext ctx;
             if (baseBanned && !baseBanned->empty()) {
                 ctx.blockedNodes.insert(baseBanned->begin(), baseBanned->end());
+            }
+            if (!tempBlockedEdges.empty()) {
+                ctx.blockedEdges.insert(tempBlockedEdges.begin(), tempBlockedEdges.end());
             }
             if (enableCongestionAvoid && !hardBlockedFiltered.empty()) {
                 ctx.blockedNodes.insert(hardBlockedFiltered.begin(), hardBlockedFiltered.end());
@@ -6312,7 +6827,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
                     goalBlockedByRegion = true;
                 }
 	            }
-            if (!goalBlockedByRegion && !goalHeldByOther) {
+            if (!goalBlockedByRegion && !goalHeldByOther && !goalTempBlocked) {
                 ctx.blockedNodes.erase(goalNodeId);
             }
             const auto t0 = std::chrono::steady_clock::now();
@@ -6336,9 +6851,10 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
                                       goalNodeId,
                                       PathPlanningConstants::resolveTurnPenaltyMm(),
                                       bannedPtr,
-                                      nullptr,
+                                      blockedEdgesPtr,
                                       scorePtr,
-                                      penaltyMm);
+                                      penaltyMm,
+                                      dynamicPenaltyFn);
             if (profileDetail) profile.astarCalls += 1;
             mark_ms(profile.astarMs, t0);
             if (res.found && !res.path.empty()) {
@@ -6562,6 +7078,46 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
                     }
                 }
             };
+    auto clear_blocking_edge = [&](bool force = false) {
+        // Soft clear: preserve blockedBySince when AGV is still stuck (reserved <= 1)
+        // so the deadlock timer keeps ticking across brief planner fluctuations.
+        if (!force && rt.reservedNodes.size() <= 1 &&
+            rt.blockedBySince != std::chrono::steady_clock::time_point{}) {
+            rt.blockedByAgvId.clear();
+            rt.blockedByNodeId = -1;
+            rt.blockedByReason.clear();
+            rt.blockedByDetail.clear();
+            rt.blockedByUpdatedAt = std::chrono::steady_clock::time_point{};
+            return;
+        }
+        rt.blockedByAgvId.clear();
+        rt.blockedByNodeId = -1;
+        rt.blockedByReason.clear();
+        rt.blockedByDetail.clear();
+        rt.blockedBySince = std::chrono::steady_clock::time_point{};
+        rt.blockedByUpdatedAt = std::chrono::steady_clock::time_point{};
+    };
+    auto record_blocking_edge = [&](const std::string& blockerAgvId,
+                                    int blockedNodeId,
+                                    const std::string& reason,
+                                    const std::string& detail) {
+        if (blockerAgvId.empty() || blockedNodeId < 0) {
+            clear_blocking_edge();
+            return;
+        }
+        // Only compare blockerAgvId for timer continuity: in a deadlock the planner
+        // may try different routes hitting different nodes held by the same blocker;
+        // the deadlock clock should keep ticking as long as the blocker is the same.
+        const bool sameBlocker = (rt.blockedByAgvId == blockerAgvId);
+        if (!sameBlocker || rt.blockedBySince == std::chrono::steady_clock::time_point{}) {
+            rt.blockedBySince = now;
+        }
+        rt.blockedByAgvId = blockerAgvId;
+        rt.blockedByNodeId = blockedNodeId;
+        rt.blockedByReason = reason;
+        rt.blockedByDetail = detail;
+        rt.blockedByUpdatedAt = now;
+    };
 
     bool reachablePrimary = false;
     bool plannedOk = false;
@@ -6637,6 +7193,17 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
                 << " reason=unreachable";
             log_line(LogLevel::INFO, oss.str());
             log_unreachable_detail("primary");
+            auto hold = reservations.findBlockingHold(primaryGoal, deviceId);
+            if (hold.has_value() && !hold->ownerAgvId.empty()) {
+                record_blocking_edge(hold->ownerAgvId,
+                                     primaryGoal,
+                                     hold_reason_label(hold->reason),
+                                     hold->detail);
+            } else {
+                clear_blocking_edge();
+            }
+        } else {
+            clear_blocking_edge();
         }
         if (updatedOut) *updatedOut = false;
         repo.updateRuntimeState(deviceId, planEntry.pathId, rt);
@@ -6945,6 +7512,14 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
             }
         }
     }
+    if (!reserveDbg.blockedBy.empty() && reserveDbg.blockedNode >= 0) {
+        record_blocking_edge(reserveDbg.blockedBy,
+                             reserveDbg.blockedNode,
+                             reserveDbg.blockedReason,
+                             reserveDbg.blockedDetail);
+    } else if (newReserved.size() > 1 || plannedRoute.size() <= 1) {
+        clear_blocking_edge(true);
+    }
     // Release obsolete holds after we have a confirmed reserved window.
     const bool autoCommit = (getenv_int("REPLAN_AUTO_COMMIT", 1) != 0);
     std::vector<int> keepNodes = newReserved;
@@ -7051,17 +7626,27 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_with_throttle(
     NodeReservationTable& reservations,
     int reserveBudgetOverride,
     int minIntervalMs,
-    bool* usedCacheOut) {
+    bool* usedCacheOut,
+    const std::vector<int>* bridgeNodeIds = nullptr) {
     if (usedCacheOut) *usedCacheOut = false;
     int baseIntervalMs = (minIntervalMs > 0) ? minIntervalMs : 200;
     int effectiveIntervalMs = baseIntervalMs;
 
     ReplanStage stage = ReplanStage::FAST;
+    PlanRuntimeState rt = repo.snapshotRuntimeState(deviceId);
+    const auto now = std::chrono::steady_clock::now();
+    const auto committed = repo.getLastSentRoute(deviceId);
+    const bool deadlockYieldActive =
+        rt.deadlockYieldUntil != std::chrono::steady_clock::time_point{} &&
+        now < rt.deadlockYieldUntil &&
+        committed.size() <= 1 &&
+        rt.reservedNodes.size() <= 1;
+    if (deadlockYieldActive) {
+        stage = ReplanStage::SUPER;
+    }
     const int majorStuckMs = getenv_int("REPLAN_MAJOR_STUCK_MS", 2000);
     const int superAfterMajorFails = std::max(1, getenv_int("REPLAN_SUPER_AFTER_MAJOR_FAILS", 3));
-    if (majorStuckMs >= 0) {
-        PlanRuntimeState rt = repo.snapshotRuntimeState(deviceId);
-        const auto now = std::chrono::steady_clock::now();
+    if (stage == ReplanStage::FAST && majorStuckMs >= 0) {
         long long staticMs = 0;
         if (rt.staticSince != std::chrono::steady_clock::time_point{}) {
             staticMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - rt.staticSince).count();
@@ -7095,7 +7680,8 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_with_throttle(
         allowLongerRoute,
         stage,
         &planUpdated,
-        &usedTempGoal);
+        &usedTempGoal,
+        bridgeNodeIds);
     if (effectiveIntervalMs > 0) {
         if (planUpdated) {
             bool refreshClock = (stage != ReplanStage::FAST) || usedTempGoal;
@@ -7105,6 +7691,174 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_with_throttle(
         *usedCacheOut = true;
     }
     return planned;
+}
+
+struct DeadlockVictim {
+    std::string deviceId;
+    int cycleSize = 0;
+    std::vector<std::string> members;
+};
+
+static int resolve_current_target_priority(const PlanRuntimeState& rt,
+                                           const std::unordered_map<std::string, PlanCacheEntry>& planByDevice) {
+    if (rt.targets.empty()) return 0;
+    auto itPlan = planByDevice.find(rt.targets.front().taskId.empty() ? std::string() : rt.targets.front().taskId);
+    (void)itPlan;
+    for (const auto& kv : planByDevice) {
+        auto itPri = kv.second.taskPriorities.find(rt.targets.front().taskId);
+        if (itPri != kv.second.taskPriorities.end()) {
+            return itPri->second;
+        }
+    }
+    return 0;
+}
+
+static std::optional<DeadlockVictim> choose_deadlock_victim(
+    const std::vector<std::string>& members,
+    const std::unordered_map<std::string, PlanRuntimeState>& runtimeByDevice,
+    const std::unordered_map<std::string, PlanCacheEntry>& planByDevice,
+    RobotDataRepository& repo) {
+    struct Candidate {
+        std::string deviceId;
+        int priority = 0;
+        size_t reservedLen = 0;
+        size_t committedLen = 0;
+    };
+    std::optional<Candidate> best;
+    for (const auto& deviceId : members) {
+        auto itRt = runtimeByDevice.find(deviceId);
+        if (itRt == runtimeByDevice.end()) continue;
+        const auto committed = repo.getLastSentRoute(deviceId);
+        const size_t committedLen = committed.size();
+        const size_t reservedLen = itRt->second.reservedNodes.size();
+        if (committedLen > 1 || reservedLen > 1) continue;
+        Candidate cand;
+        cand.deviceId = deviceId;
+        cand.priority = resolve_current_target_priority(itRt->second, planByDevice);
+        cand.reservedLen = reservedLen;
+        cand.committedLen = committedLen;
+        if (!best.has_value() ||
+            cand.priority < best->priority ||
+            (cand.priority == best->priority && cand.reservedLen < best->reservedLen) ||
+            (cand.priority == best->priority && cand.reservedLen == best->reservedLen &&
+             cand.committedLen < best->committedLen) ||
+            (cand.priority == best->priority && cand.reservedLen == best->reservedLen &&
+             cand.committedLen == best->committedLen && cand.deviceId < best->deviceId)) {
+            best = cand;
+        }
+    }
+    if (!best.has_value()) return std::nullopt;
+    DeadlockVictim out;
+    out.deviceId = best->deviceId;
+    out.cycleSize = static_cast<int>(members.size());
+    out.members = members;
+    return out;
+}
+
+static std::vector<DeadlockVictim> detect_deadlock_victims(
+    const std::vector<std::pair<std::string, PlanRuntimeState>>& runtimeSnapshots,
+    const std::unordered_map<std::string, PlanCacheEntry>& planByDevice,
+    RobotDataRepository& repo) {
+    if (getenv_int("DEADLOCK_DETECTION_ENABLE", 1) == 0) {
+        return {};
+    }
+    const int detectMs = std::max(0, getenv_int("DEADLOCK_DETECT_MS", 1500));
+    const int staleMs = std::max(0, getenv_int("DEADLOCK_EDGE_STALE_MS", 5000));
+    const double speedEps = std::max(0.0, getenv_double("DEADLOCK_SPEED_EPS_MM_S", 1.0));
+    const auto now = std::chrono::steady_clock::now();
+
+    std::unordered_map<std::string, PlanRuntimeState> runtimeByDevice;
+    runtimeByDevice.reserve(runtimeSnapshots.size());
+    std::unordered_map<std::string, std::string> blockerOf;
+    blockerOf.reserve(runtimeSnapshots.size());
+
+    auto is_waiting = [&](const std::string& deviceId, const PlanRuntimeState& rt) {
+        if (rt.blockedByAgvId.empty() || rt.blockedByAgvId == deviceId) return false;
+        if (rt.blockedBySince == std::chrono::steady_clock::time_point{}) return false;
+        if (detectMs > 0 && (now - rt.blockedBySince) < std::chrono::milliseconds(detectMs)) return false;
+        if (staleMs > 0) {
+            if (rt.blockedByUpdatedAt == std::chrono::steady_clock::time_point{}) return false;
+            if ((now - rt.blockedByUpdatedAt) > std::chrono::milliseconds(staleMs)) return false;
+        }
+        auto stOpt = repo.getStatusById(deviceId);
+        if (!stOpt.has_value()) return false;
+        return std::abs(stOpt->speed) <= speedEps;
+    };
+
+    for (const auto& kv : runtimeSnapshots) {
+        runtimeByDevice.emplace(kv.first, kv.second);
+    }
+    for (const auto& kv : runtimeByDevice) {
+        if (!is_waiting(kv.first, kv.second)) continue;
+        if (runtimeByDevice.find(kv.second.blockedByAgvId) == runtimeByDevice.end()) continue;
+        blockerOf[kv.first] = kv.second.blockedByAgvId;
+    }
+
+    std::vector<DeadlockVictim> victims;
+    std::unordered_set<std::string> covered;
+    std::unordered_set<std::string> seenCycles;
+
+    auto add_cycle = [&](std::vector<std::string> members) {
+        std::sort(members.begin(), members.end());
+        members.erase(std::unique(members.begin(), members.end()), members.end());
+        if (members.size() < 2 || members.size() > 3) return;
+        std::string key;
+        for (size_t i = 0; i < members.size(); ++i) {
+            if (i > 0) key += "|";
+            key += members[i];
+        }
+        if (!seenCycles.insert(key).second) return;
+        auto victim = choose_deadlock_victim(members, runtimeByDevice, planByDevice, repo);
+        if (!victim.has_value()) return;
+        if (covered.count(victim->deviceId) > 0) return;
+        covered.insert(victim->deviceId);
+        victims.push_back(std::move(*victim));
+    };
+
+    for (const auto& kv : blockerOf) {
+        const std::string& a = kv.first;
+        const std::string& b = kv.second;
+        auto itB = blockerOf.find(b);
+        if (itB != blockerOf.end() && itB->second == a) {
+            add_cycle({a, b});
+        }
+    }
+    for (const auto& kv : blockerOf) {
+        const std::string& a = kv.first;
+        const std::string& b = kv.second;
+        auto itB = blockerOf.find(b);
+        if (itB == blockerOf.end()) continue;
+        const std::string& c = itB->second;
+        if (c == a || c == b) continue;
+        auto itC = blockerOf.find(c);
+        if (itC == blockerOf.end() || itC->second != a) continue;
+        add_cycle({a, b, c});
+    }
+
+    return victims;
+}
+
+static void apply_deadlock_victims(RobotDataRepository& repo,
+                                   const std::vector<DeadlockVictim>& victims) {
+    if (victims.empty()) return;
+    const int yieldMs = std::max(500, getenv_int("DEADLOCK_YIELD_MS", 3000));
+    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(yieldMs);
+    for (const auto& victim : victims) {
+        auto rt = repo.snapshotRuntimeState(victim.deviceId);
+        const auto committed = repo.getLastSentRoute(victim.deviceId);
+        if (committed.size() > 1 || rt.reservedNodes.size() > 1) {
+            continue;
+        }
+        rt.deadlockYieldUntil = until;
+        rt.deadlockCycleSize = victim.cycleSize;
+        repo.updateRuntimeState(victim.deviceId, rt.planPathId, rt);
+        std::cout << log_time_prefix()
+                  << "[Deadlock] yield deviceId=" << victim.deviceId
+                  << " cycleSize=" << victim.cycleSize
+                  << " members=" << join_string_list(victim.members)
+                  << " yieldMs=" << yieldMs
+                  << std::endl;
+    }
 }
 
 static std::string normalize_request_timestamp(const std::string& raw) {
@@ -9669,6 +10423,14 @@ int main() {
                 std::vector<std::tuple<std::shared_ptr<MapRuntimeContext>, std::string, PlanCacheEntry>> tasks;
                 for (const auto& ctx : contexts) {
                     auto planSnapshots = ctx->robotRepo.snapshotPlans();
+                    std::unordered_map<std::string, PlanCacheEntry> planByDevice;
+                    planByDevice.reserve(planSnapshots.size());
+                    for (const auto& kv : planSnapshots) {
+                        planByDevice.emplace(kv.first, kv.second);
+                    }
+                    auto runtimeSnapshots = ctx->robotRepo.snapshotRuntimeStates();
+                    auto deadlockVictims = detect_deadlock_victims(runtimeSnapshots, planByDevice, ctx->robotRepo);
+                    apply_deadlock_victims(ctx->robotRepo, deadlockVictims);
                     for (const auto& kv : planSnapshots) {
                         if (kv.second.plan.segments.empty()) continue;
                         tasks.emplace_back(ctx, kv.first, kv.second);
@@ -9729,7 +10491,8 @@ int main() {
                                     ctx->nodeReservations,
                                     reserveBudgetOverride,
                                     baseIntervalMs,
-                                    nullptr);
+                                    nullptr,
+                                    ctx->bridgeRuleNodeIds.empty() ? nullptr : &ctx->bridgeRuleNodeIds);
                             }
                             if (profileSummary) {
                                 const auto jobMs = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -9794,7 +10557,8 @@ int main() {
                                                     ctx->nodeReservations,
                                                     reserveBudgetOverride,
                                                     baseIntervalMs,
-                                                    nullptr);
+                                                    nullptr,
+                                                    ctx->bridgeRuleNodeIds.empty() ? nullptr : &ctx->bridgeRuleNodeIds);
                                             }
                                         }
                                     }
@@ -10329,10 +11093,10 @@ int main() {
                     continue;
                 }
 
+                std::optional<RobotStatusEntry> stOpt = ctx->robotRepo.getStatusById(deviceId);
                 int currentNodeId = -1;
                 try {
                     int refNodeId = -1;
-                    auto stOpt = ctx->robotRepo.getStatusById(deviceId);
                     if (stOpt.has_value()) {
                         refNodeId = resolve_status_node_id(*stOpt, *ctx->mapInfoPtr);
                     }
@@ -10368,6 +11132,126 @@ int main() {
                 nodeBlockMm = std::max(0.0, nodeBlockMm);
                 edgeBlockMm = std::max(0.0, edgeBlockMm);
                 BlockedGraph blocked = compute_blocked_graph_from_obstacles(*ctx->mapInfoPtr, obstacles, nodeBlockMm, edgeBlockMm);
+
+                const int obstacleTtlMs = std::max(0, getenv_int("AROUND_PATH_OBSTACLE_TTL_MS", 10000));
+                PlanRuntimeState rt = ctx->robotRepo.snapshotRuntimeState(deviceId);
+                const long long runtimePathId = (rt.planPathId > 0) ? rt.planPathId : basePlan.pathId;
+                const std::vector<int> committedRoute = ctx->robotRepo.getLastSentRoute(deviceId);
+                const bool clearCommitted =
+                    blocked_graph_intersects_route(blocked, committedRoute) ||
+                    blocked_graph_intersects_route(blocked, rt.reservedNodes);
+                if (clearCommitted) {
+                    ctx->nodeReservations.releaseAllByOwner(deviceId);
+                    ctx->robotRepo.updateLastSentRoute(deviceId, {});
+                    rt.reservedNodes.clear();
+                    rt.blockedSince = std::chrono::steady_clock::time_point{};
+                    rt.tempGoalNodeId = -1;
+                    rt.lastFirstHopFromNodeId = -1;
+                    rt.lastFirstHopNodeId = -1;
+                    rt.lastFirstHopSince = std::chrono::steady_clock::time_point{};
+                    rt.tempGoalBans.clear();
+                    rt.tempGoalTabu.clear();
+                    rt.tempGoalFreezeUntil = std::chrono::steady_clock::time_point{};
+                    rt.statusMismatchSince = std::chrono::steady_clock::time_point{};
+                    rt.statusMismatchNodeId = -1;
+                    std::cout << log_time_prefix()
+                              << "[AroundPath] clear committed deviceId=" << deviceId
+                              << " blockedNodes=" << blocked.blockedNodes.size()
+                              << " blockedEdges=" << blocked.blockedEdges.size()
+                              << std::endl;
+                }
+                if (obstacleTtlMs > 0 &&
+                    (!blocked.blockedNodes.empty() || !blocked.blockedEdges.empty())) {
+                    rt.tempBlockedNodes = blocked.blockedNodes;
+                    rt.tempBlockedEdges = blocked.blockedEdges;
+                    rt.tempBlockedUntil = std::chrono::steady_clock::now() + std::chrono::milliseconds(obstacleTtlMs);
+                    std::cout << log_time_prefix()
+                              << "[AroundPath] temp obstacle deviceId=" << deviceId
+                              << " ttlMs=" << obstacleTtlMs
+                              << " nodes=" << blocked.blockedNodes.size()
+                              << " edges=" << blocked.blockedEdges.size()
+                              << std::endl;
+                } else {
+                    rt.tempBlockedNodes.clear();
+                    rt.tempBlockedEdges.clear();
+                    rt.tempBlockedUntil = std::chrono::steady_clock::time_point{};
+                    std::cout << log_time_prefix()
+                              << "[AroundPath] clear temp obstacle deviceId=" << deviceId
+                              << std::endl;
+                }
+                ctx->robotRepo.updateRuntimeState(deviceId, runtimePathId, rt);
+                ctx->robotRepo.clearDynamicPlan(deviceId);
+
+                const int reserveBudgetOverride = std::max(1, getenv_int("TRAIL_MAX_POINTS", 10));
+                int committedNextNode = -1;
+                int batteryLevel = 100;
+                int deviceType = 0;
+                if (stOpt.has_value()) {
+                    committedNextNode = resolve_committed_next_node_id(*stOpt, *ctx->mapInfoPtr);
+                    batteryLevel = stOpt->batteryLevel;
+                    deviceType = stOpt->deviceType;
+                }
+                bool dynamicUpdated = true;
+                bool usedTempGoal = false;
+                auto dynamicPlan = compute_dynamic_plan_to_next_target(
+                    deviceId,
+                    currentNodeId,
+                    committedNextNode,
+                    batteryLevel,
+                    deviceType,
+                    basePlan,
+                    ctx->robotRepo,
+                    *ctx->mapInfoPtr,
+                    ctx->skipStaticTable,
+                    ctx->staticTableReady,
+                    ctx->staticTable,
+                    *ctx->aStarPtr,
+                    ctx->nodeReservations,
+                    reserveBudgetOverride,
+                    true,
+                    ReplanStage::NONE,
+                    &dynamicUpdated,
+                    &usedTempGoal,
+                    ctx->bridgeRuleNodeIds.empty() ? nullptr : &ctx->bridgeRuleNodeIds);
+                ctx->robotRepo.updateDynamicPlan(
+                    deviceId,
+                    dynamicPlan,
+                    basePlan.pathId,
+                    reserveBudgetOverride,
+                    true);
+
+                auto publish_traffic_and_trail = [&]() {
+                    std::unordered_map<std::string, int> emptyPriorities;
+                    ordered_json trafficPayload =
+                        build_traffic_path_payload(messageId, ctx->activeMapId.load(), ctx->robotRepo, *ctx->mapInfoPtr, emptyPriorities,
+                                                   ctx->mapReady.load(), ctx->staticTableReady, ctx->skipStaticTable, ctx->staticTable,
+                                                   ctx->aStarPtr.get(), ctx->nodeReservations);
+                    attach_map_metadata(trafficPayload, *ctx);
+                    std::string trafficPayloadStr = trafficPayload.dump();
+                    trafficPathPublisher.publishPayload(trafficPayloadStr);
+                    trafficDebug.onPublish(trafficPayload, trafficPayloadStr, "replan");
+                    const bool logSummary = env_enabled("RECEIVER_LOG_ROUTE_SUMMARY") || env_enabled("RECEIVER_LOG_ROUTE_DETAIL");
+                    const bool logDetail = env_enabled("RECEIVER_LOG_ROUTE_DETAIL");
+                    auto latestPlanOpt = ctx->robotRepo.getPlan(deviceId);
+                    auto trailRespOpt = build_trail_response_for_device(
+                        messageId,
+                        deviceId,
+                        subTaskId,
+                        latestPlanOpt,
+                        ctx->robotRepo,
+                        *ctx->mapInfoPtr,
+                        ctx->mapReady.load(),
+                        ctx->skipStaticTable,
+                        ctx->staticTableReady,
+                        ctx->staticTable,
+                        ctx->aStarPtr.get(),
+                        ctx->nodeReservations,
+                        logSummary,
+                        logDetail);
+                    if (trailRespOpt.has_value()) {
+                        algoPublisher.sendTrailResponse(*trailRespOpt);
+                    }
+                };
 
                 PathPlanningHelper::AmrPlanInfo newPlan;
                 newPlan.amrId = deviceId;
@@ -10448,45 +11332,8 @@ int main() {
                 }
 
                 if (newPlan.segments.empty()) {
+                    publish_traffic_and_trail();
                     continue;
-                }
-
-                std::string schedId = basePlan.schedulingRequestId.empty() ? messageId : basePlan.schedulingRequestId;
-                std::string genTime = iso8601_utc_now();
-                ctx->robotRepo.updatePlan(deviceId, newPlan, schedId, genTime, basePlan.taskPriorities);
-
-                {
-                    auto updatedPlanOpt = ctx->robotRepo.getPlan(deviceId);
-                    if (updatedPlanOpt.has_value()) {
-                        int committedNextNode = -1;
-                        int batteryLevel = 100;
-                        int deviceType = 0;
-                        auto stOpt = ctx->robotRepo.getStatusById(deviceId);
-                        if (stOpt.has_value()) {
-                            committedNextNode = resolve_committed_next_node_id(*stOpt, *ctx->mapInfoPtr);
-                            batteryLevel = stOpt->batteryLevel;
-                            deviceType = stOpt->deviceType;
-                        }
-                        const int reserveBudgetOverride = 0;
-                        compute_dynamic_plan_to_next_target(
-                            deviceId,
-                            currentNodeId,
-                            committedNextNode,
-                            batteryLevel,
-                            deviceType,
-                            *updatedPlanOpt,
-                            ctx->robotRepo,
-                            *ctx->mapInfoPtr,
-                            ctx->skipStaticTable,
-                            ctx->staticTableReady,
-                            ctx->staticTable,
-                            *ctx->aStarPtr,
-                            ctx->nodeReservations,
-                            reserveBudgetOverride,
-                            true,
-                            ReplanStage::NONE,
-                            nullptr);
-                    }
                 }
 
                 PlanCacheEntry respEntry;
@@ -10495,39 +11342,7 @@ int main() {
                 if (respOpt.has_value()) {
                     algoPublisher.sendAroundPathResponse(*respOpt);
                 }
-
-                std::unordered_map<std::string, int> emptyPriorities;
-                ordered_json trafficPayload =
-                    build_traffic_path_payload(messageId, ctx->activeMapId.load(), ctx->robotRepo, *ctx->mapInfoPtr, emptyPriorities,
-                                               ctx->mapReady.load(), ctx->staticTableReady, ctx->skipStaticTable, ctx->staticTable,
-                                               ctx->aStarPtr.get(), ctx->nodeReservations);
-                attach_map_metadata(trafficPayload, *ctx);
-                std::string trafficPayloadStr = trafficPayload.dump();
-                trafficPathPublisher.publishPayload(trafficPayloadStr);
-                trafficDebug.onPublish(trafficPayload, trafficPayloadStr, "replan");
-                {
-                    const bool logSummary = env_enabled("RECEIVER_LOG_ROUTE_SUMMARY") || env_enabled("RECEIVER_LOG_ROUTE_DETAIL");
-                    const bool logDetail = env_enabled("RECEIVER_LOG_ROUTE_DETAIL");
-                    auto planOpt = ctx->robotRepo.getPlan(deviceId);
-                    auto trailRespOpt = build_trail_response_for_device(
-                        messageId,
-                        deviceId,
-                        subTaskId,
-                        planOpt,
-                        ctx->robotRepo,
-                        *ctx->mapInfoPtr,
-                        ctx->mapReady.load(),
-                        ctx->skipStaticTable,
-                        ctx->staticTableReady,
-                        ctx->staticTable,
-                        ctx->aStarPtr.get(),
-                        ctx->nodeReservations,
-                        logSummary,
-                        logDetail);
-                    if (trailRespOpt.has_value()) {
-                        algoPublisher.sendTrailResponse(*trailRespOpt);
-                    }
-                }
+                publish_traffic_and_trail();
                 continue;
             }
 

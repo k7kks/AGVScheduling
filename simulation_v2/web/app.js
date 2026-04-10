@@ -47,6 +47,7 @@ const state = {
   showNodes: false,
   showNodeIds: false,
   showRegions: true,
+  showBridges: true,
   showReserved: true,
   displayCount: 50,
   pollMs: 120,
@@ -321,6 +322,9 @@ function drawMap() {
   const { toCanvas } = canvasTransform();
   const nodePos = state.map.nodePositions;
   const showRegions = state.showRegions && Number(state.map?.regions?.count || 0) > 0;
+  const bridgeNodeIds = Array.isArray(state.map?.bridgeNodeIds) ? state.map.bridgeNodeIds : [];
+  const bridgeNodeSet = new Set(bridgeNodeIds.map((id) => String(id)));
+  const bridgeEdges = Array.isArray(state.map?.bridgeEdges) ? state.map.bridgeEdges : [];
 
   // edges
   ctx.lineWidth = 1;
@@ -352,6 +356,46 @@ function drawMap() {
     ctx.stroke();
   }
 
+  if (state.showBridges && bridgeEdges.length) {
+    ctx.save();
+    ctx.strokeStyle = "rgba(249, 115, 22, 0.95)";
+    ctx.lineWidth = 4;
+    ctx.globalAlpha = 0.85;
+    for (const e of bridgeEdges) {
+      const a = nodePos[String(e.startNode)];
+      const b = nodePos[String(e.endNode)];
+      if (!a || !b) continue;
+      const p0 = toCanvas(a.x, a.y);
+      const p1 = toCanvas(b.x, b.y);
+      ctx.beginPath();
+      ctx.moveTo(p0.cx, p0.cy);
+      ctx.lineTo(p1.cx, p1.cy);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  if (state.showBridges && bridgeNodeIds.length) {
+    ctx.save();
+    for (const rawId of bridgeNodeIds) {
+      const pos = nodePos[String(rawId)];
+      if (!pos) continue;
+      const p = toCanvas(pos.x, pos.y);
+      ctx.beginPath();
+      ctx.arc(p.cx, p.cy, 7, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(251, 146, 60, 0.20)";
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(p.cx, p.cy, 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(249, 115, 22, 0.95)";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255, 237, 213, 0.95)";
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   if (!state.showNodes) return;
 
   // nodes (optional)
@@ -370,7 +414,8 @@ function drawMap() {
     const typeColor = n.type === 7 || n.type === 9 ? "#ff4500" : n.type === 1 || n.type === 2 ? "#ffd700" : "#6b7280";
     const regionId = Number(n.region);
     const hasRegion = showRegions && Number.isFinite(regionId) && regionId >= 0;
-    const c = hasRegion ? regionColor(regionId, 0.85) : typeColor;
+    const isBridge = bridgeNodeSet.has(String(n.id));
+    const c = isBridge ? "#fb923c" : (hasRegion ? regionColor(regionId, 0.85) : typeColor);
     ctx.arc(p.cx, p.cy, r, 0, Math.PI * 2);
     ctx.fillStyle = c;
     ctx.globalAlpha = 0.85;
@@ -693,12 +738,21 @@ async function fetchMap() {
   state.vMaxMmS = Math.max(1, Number(data.info?.maxSpeed || 1000));
   const regionCount = Number(data.regions?.count || 0);
   const regionToggle = document.getElementById("toggle-regions");
+  const bridgeToggle = document.getElementById("toggle-bridges");
   if (regionToggle) {
     const hasRegions = Number.isFinite(regionCount) && regionCount > 0;
     regionToggle.disabled = !hasRegions;
     if (!hasRegions) {
       state.showRegions = false;
       regionToggle.checked = false;
+    }
+  }
+  if (bridgeToggle) {
+    const hasBridges = Array.isArray(data.bridgeNodeIds) && data.bridgeNodeIds.length > 0;
+    bridgeToggle.disabled = !hasBridges;
+    if (!hasBridges) {
+      state.showBridges = false;
+      bridgeToggle.checked = false;
     }
   }
   document.title = `CRCS-V1.0 在线仿真 - ${data.info?.name || "map"}`;
@@ -763,6 +817,10 @@ function initUi() {
   });
   document.getElementById("toggle-regions").addEventListener("change", (e) => {
     state.showRegions = e.target.checked;
+    draw();
+  });
+  document.getElementById("toggle-bridges").addEventListener("change", (e) => {
+    state.showBridges = e.target.checked;
     draw();
   });
   document.getElementById("toggle-reserved").addEventListener("change", (e) => {

@@ -133,7 +133,8 @@ AStarPathFinder::PathResult AStarPathFinder::findPath(
     const std::unordered_set<int>* bannedNodes,
     const std::set<std::pair<int,int>>* bannedEdges,
     const std::unordered_map<int, double>* nodePenalty,
-    double nodePenaltyMm
+    double nodePenaltyMm,
+    DynamicNodePenaltyFn dynamicNodePenaltyFn
 ) {
     PathResult result;
 
@@ -171,10 +172,11 @@ AStarPathFinder::PathResult AStarPathFinder::findPath(
 
     gScores[startState] = 0;
     double h = heuristic(startIdx, endIdx);
-    openSet.emplace(-1, startIdx, 0, h);
+    openSet.emplace(-1, startIdx, 0.0, 0.0, h);
 
     const auto& aftNode = mapInfo_.getAftNode();
     const bool usePenalty = (nodePenalty && nodePenaltyMm > 0.0);
+    const bool useDynamicPenalty = static_cast<bool>(dynamicNodePenaltyFn);
 
     auto is_banned_index = [&](int nodeIdx) -> bool {
         if (!bannedNodes) return false;
@@ -197,13 +199,13 @@ AStarPathFinder::PathResult AStarPathFinder::findPath(
 
         State currentState{current.prev, current.curr};
         auto gItCurrent = gScores.find(currentState);
-        if (gItCurrent != gScores.end() && current.gScore > gItCurrent->second) {
+        if (gItCurrent != gScores.end() && current.scoreCost > gItCurrent->second) {
             continue;
         }
 
         if (current.curr == endIdx) {
             result.path = reconstructPath(cameFrom, currentState);
-            result.distance = current.gScore;
+            result.distance = current.travelCost;
             result.found = true;
             return result;
         }
@@ -248,6 +250,7 @@ AStarPathFinder::PathResult AStarPathFinder::findPath(
                 turnCost = calculateTurnPenalty(current.prev, current.curr, neighborIdx, turnPenalty);
             }
 
+            double tentativeTravelCost = current.travelCost + edgeCost + turnCost;
             double penaltyCost = 0.0;
             if (usePenalty) {
                 auto idIt = nodeIndexToId_.find(neighborIdx);
@@ -259,16 +262,27 @@ AStarPathFinder::PathResult AStarPathFinder::findPath(
                     }
                 }
             }
+            if (useDynamicPenalty) {
+                int prevNodeId = -1;
+                int nextNodeId = -1;
+                auto prevIt = nodeIndexToId_.find(current.curr);
+                if (prevIt != nodeIndexToId_.end()) prevNodeId = prevIt->second;
+                auto nextIt = nodeIndexToId_.find(neighborIdx);
+                if (nextIt != nodeIndexToId_.end()) nextNodeId = nextIt->second;
+                penaltyCost += std::max(0.0, dynamicNodePenaltyFn(prevNodeId,
+                                                                  nextNodeId,
+                                                                  tentativeTravelCost));
+            }
 
-            double tentativeGScore = current.gScore + edgeCost + turnCost + penaltyCost;
+            double tentativeScore = current.scoreCost + edgeCost + turnCost + penaltyCost;
 
             auto gIt = gScores.find(nextState);
-            if (gIt == gScores.end() || tentativeGScore < gIt->second) {
-                gScores[nextState] = tentativeGScore;
+            if (gIt == gScores.end() || tentativeScore < gIt->second) {
+                gScores[nextState] = tentativeScore;
                 cameFrom[nextState] = currentState;
 
-                double fScore = tentativeGScore + heuristic(neighborIdx, endIdx);
-                openSet.emplace(current.curr, neighborIdx, tentativeGScore, fScore);
+                double fScore = tentativeScore + heuristic(neighborIdx, endIdx);
+                openSet.emplace(current.curr, neighborIdx, tentativeTravelCost, tentativeScore, fScore);
             }
         }
     }

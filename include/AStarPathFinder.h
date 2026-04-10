@@ -19,6 +19,10 @@
  */
 class AStarPathFinder {
 public:
+    using DynamicNodePenaltyFn = std::function<double(int prevNodeId,
+                                                      int nodeId,
+                                                      double arrivalCostMm)>;
+
     struct PathResult {
         std::vector<int> path;      // 完整路径（节点ID序列）
         double distance;            // 路径距离（mm）
@@ -44,7 +48,8 @@ public:
                         const std::unordered_set<int>* bannedNodes = nullptr,
                         const std::set<std::pair<int,int>>* bannedEdges = nullptr,
                         const std::unordered_map<int, double>* nodePenalty = nullptr,
-                        double nodePenaltyMm = 0.0);
+                        double nodePenaltyMm = 0.0,
+                        DynamicNodePenaltyFn dynamicNodePenaltyFn = {});
     
 private:
     const MapInfo& mapInfo_;
@@ -75,11 +80,12 @@ private:
     struct AStarNode {
         int prev;
         int curr;
-        double gScore;  // 从起点到当前节点的实际代价
-        double fScore;  // gScore + 启发式估计
+        double travelCost;  // 到当前节点的名义行驶代价（不含软惩罚）
+        double scoreCost;   // 搜索评分代价（含软惩罚）
+        double fScore;      // scoreCost + 启发式估计
 
-        AStarNode(int p, int c, double g, double f)
-            : prev(p), curr(c), gScore(g), fScore(f) {}
+        AStarNode(int p, int c, double travel, double score, double f)
+            : prev(p), curr(c), travelCost(travel), scoreCost(score), fScore(f) {}
     };
     
     // 优先队列比较器

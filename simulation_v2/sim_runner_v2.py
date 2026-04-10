@@ -783,6 +783,125 @@ def _build_graph_regions(nodes: List[Dict[str, Any]],
     return region_by_index, len(seeds)
 
 
+def _build_passable_adjacency(nodes: List[Dict[str, Any]],
+                              edges: List[Dict[str, Any]]) -> Tuple[Dict[int, int], List[Set[int]]]:
+    id_to_index = {int(n["id"]): i for i, n in enumerate(nodes)}
+    adj: List[Set[int]] = [set() for _ in range(len(nodes))]
+    for e in edges:
+        a = e.get("startNode")
+        b = e.get("endNode")
+        if a is None or b is None:
+            continue
+        ia = id_to_index.get(int(a))
+        ib = id_to_index.get(int(b))
+        if ia is None or ib is None or ia == ib:
+            continue
+        adj[ia].add(ib)
+        adj[ib].add(ia)
+    return id_to_index, adj
+
+
+def _collect_bridge_region_groups(nodes: List[Dict[str, Any]],
+                                  adj: List[Set[int]]) -> List[List[int]]:
+    count = len(nodes)
+    if count <= 0:
+        return []
+
+    bridge_core = [False for _ in range(count)]
+    for idx, node in enumerate(nodes):
+        if not _node_passable(node):
+            continue
+        degree = sum(1 for nb in adj[idx] if 0 <= nb < count and _node_passable(nodes[nb]))
+        if degree == 2:
+            bridge_core[idx] = True
+
+    comp_by_index = [-1 for _ in range(count)]
+    core_nodes_by_comp: List[List[int]] = []
+    for idx in range(count):
+        if not bridge_core[idx]:
+            continue
+        if comp_by_index[idx] >= 0:
+            continue
+        comp_id = len(core_nodes_by_comp)
+        core_nodes_by_comp.append([])
+        q = deque([idx])
+        comp_by_index[idx] = comp_id
+        while q:
+            cur = q.popleft()
+            core_nodes_by_comp[comp_id].append(cur)
+            for nb in adj[cur]:
+                if nb < 0 or nb >= count or not bridge_core[nb]:
+                    continue
+                if comp_by_index[nb] >= 0:
+                    continue
+                comp_by_index[nb] = comp_id
+                q.append(nb)
+
+    if not core_nodes_by_comp:
+        return []
+
+    min_nodes = max(1, _safe_int(env("CONGESTION_REGION_BRIDGE_MIN_NODES", "4"), 4))
+    ordered: List[List[int]] = []
+    for core_nodes in core_nodes_by_comp:
+        if len(core_nodes) < min_nodes:
+            continue
+        core_set = set(core_nodes)
+        endpoint_core_nodes: List[int] = []
+        for idx in core_nodes:
+            core_degree = sum(1 for nb in adj[idx] if nb in core_set)
+            if core_degree <= 1:
+                endpoint_core_nodes.append(idx)
+        merged = set(core_nodes)
+        for idx in endpoint_core_nodes:
+            for nb in adj[idx]:
+                if nb < 0 or nb >= count:
+                    continue
+                if not _node_passable(nodes[nb]):
+                    continue
+                if nb in core_set:
+                    continue
+                merged.add(nb)
+        ordered.append(sorted(merged))
+    ordered.sort(key=lambda items: items[0] if items else -1)
+    return ordered
+
+
+def _build_bridge_overlay(nodes: List[Dict[str, Any]],
+                          edges: List[Dict[str, Any]]) -> Tuple[List[int], List[Dict[str, int]]]:
+    if not env_bool("CONGESTION_REGION_BRIDGE_ENABLE", True):
+        return [], []
+    id_to_index, adj = _build_passable_adjacency(nodes, edges)
+    groups = _collect_bridge_region_groups(nodes, adj)
+    if not groups:
+        return [], []
+
+    bridge_indices: Set[int] = set()
+    for group in groups:
+        bridge_indices.update(group)
+
+    bridge_node_ids = sorted(int(nodes[idx]["id"]) for idx in bridge_indices if 0 <= idx < len(nodes))
+    bridge_node_set = set(bridge_node_ids)
+    bridge_edges: List[Dict[str, int]] = []
+    seen_edges: Set[Tuple[int, int]] = set()
+    for e in edges:
+        a = e.get("startNode")
+        b = e.get("endNode")
+        if a is None or b is None:
+            continue
+        a = int(a)
+        b = int(b)
+        if a == b:
+            continue
+        if a not in bridge_node_set or b not in bridge_node_set:
+            continue
+        key = (a, b) if a < b else (b, a)
+        if key in seen_edges:
+            continue
+        seen_edges.add(key)
+        bridge_edges.append({"startNode": key[0], "endNode": key[1]})
+    return bridge_node_ids, bridge_edges
+
+
 def _compute_region_stats(nodes: List[Dict[str, Any]],
                           region_by_index: List[int],
                           region_count: int,
@@ -860,6 +979,8 @@ def build_web_map_payload(map_raw: Dict[str, Any], agv_count: int) -> Dict[str, 
             continue
         out_edges.append({"startNode": int(a), "endNode": int(b)})
 
+    bridge_node_ids, bridge_edges = _build_bridge_overlay(node_meta, out_edges)
+
     passable_nodes = sum(1 for n in node_meta if _node_passable(n))
 
     mode = env("CONGESTION_REGION_MODE", "graph").strip().lower()
@@ -933,6 +1054,9 @@ def build_web_map_payload(map_raw: Dict[str, Any], agv_count: int) -> Dict[str, 
             "hardLimit": int(region_hard),
             "stats": region_stats,
         },
+        "bridgeNodeIds": bridge_node_ids,
+        "bridgeEdges": bridge_edges,
+        "bridgeNodeSource": "rule" if bridge_node_ids else "",
     }
 
 

@@ -5,6 +5,7 @@
 #include <deque>
 #include <limits>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "common/PathPlanningConstants.h"
 
@@ -44,46 +45,6 @@ void gatherNeighborIndices(const MapInfo& mapInfo, int idx, std::vector<int>& ou
 
 namespace {
 
-struct BridgeRegionDisjointSet {
-    std::vector<int> parent;
-    std::vector<int> rank;
-
-    explicit BridgeRegionDisjointSet(int n)
-        : parent(static_cast<size_t>(n), 0),
-          rank(static_cast<size_t>(n), 0) {
-        for (int i = 0; i < n; ++i) {
-            parent[static_cast<size_t>(i)] = i;
-        }
-    }
-
-    int find(int x) {
-        int root = x;
-        while (parent[static_cast<size_t>(root)] != root) {
-            root = parent[static_cast<size_t>(root)];
-        }
-        while (parent[static_cast<size_t>(x)] != x) {
-            int p = parent[static_cast<size_t>(x)];
-            parent[static_cast<size_t>(x)] = root;
-            x = p;
-        }
-        return root;
-    }
-
-    void unite(int a, int b) {
-        int ra = find(a);
-        int rb = find(b);
-        if (ra == rb) return;
-        if (rank[static_cast<size_t>(ra)] < rank[static_cast<size_t>(rb)]) {
-            parent[static_cast<size_t>(ra)] = rb;
-            return;
-        }
-        parent[static_cast<size_t>(rb)] = ra;
-        if (rank[static_cast<size_t>(ra)] == rank[static_cast<size_t>(rb)]) {
-            rank[static_cast<size_t>(ra)] += 1;
-        }
-    }
-};
-
 int countPassableRegionNeighbors(const MapInfo& mapInfo,
                                  const std::vector<Node>& nodes,
                                  int idx) {
@@ -110,7 +71,7 @@ void collectBridgeRegionGroups(const MapInfo& mapInfo,
         const Node& node = nodes[static_cast<size_t>(idx)];
         if (!isPassableRegionNode(node)) continue;
         int undirectedDegree = countPassableRegionNeighbors(mapInfo, nodes, idx);
-        if (undirectedDegree > 0 && undirectedDegree <= 2) {
+        if (undirectedDegree == 2) {
             bridgeCore[static_cast<size_t>(idx)] = 1;
         }
     }
@@ -142,54 +103,41 @@ void collectBridgeRegionGroups(const MapInfo& mapInfo,
     }
     if (coreNodesByComponent.empty()) return;
 
-    std::vector<std::vector<int>> connectorsByComponent(coreNodesByComponent.size());
+    const int minCoreNodes = std::max(1, PathPlanningConstants::resolveBridgeRegionMinNodes());
+    std::vector<std::pair<int, std::vector<int>>> orderedGroups;
+    orderedGroups.reserve(coreNodesByComponent.size());
     for (size_t compIdx = 0; compIdx < coreNodesByComponent.size(); ++compIdx) {
-        auto& connectors = connectorsByComponent[compIdx];
-        for (int idx : coreNodesByComponent[compIdx]) {
+        const auto& coreNodes = coreNodesByComponent[compIdx];
+        if (static_cast<int>(coreNodes.size()) < minCoreNodes) continue;
+
+        std::unordered_set<int> coreSet(coreNodes.begin(), coreNodes.end());
+        std::vector<int> endpointCoreNodes;
+        endpointCoreNodes.reserve(coreNodes.size());
+        for (int idx : coreNodes) {
+            gatherNeighborIndices(mapInfo, idx, neighbors);
+            int coreNeighborCount = 0;
+            for (int nb : neighbors) {
+                if (coreSet.count(nb) > 0) {
+                    coreNeighborCount += 1;
+                }
+            }
+            if (coreNeighborCount <= 1) {
+                endpointCoreNodes.push_back(idx);
+            }
+        }
+
+        std::vector<int> merged = coreNodes;
+        for (int idx : endpointCoreNodes) {
             gatherNeighborIndices(mapInfo, idx, neighbors);
             for (int nb : neighbors) {
                 if (nb < 0 || nb >= nodeCount) continue;
                 if (!isPassableRegionNode(nodes[static_cast<size_t>(nb)])) continue;
-                if (bridgeCore[static_cast<size_t>(nb)]) continue;
-                connectors.push_back(nb);
+                if (coreSet.count(nb) > 0) continue;
+                merged.push_back(nb);
             }
         }
-        std::sort(connectors.begin(), connectors.end());
-        connectors.erase(std::unique(connectors.begin(), connectors.end()), connectors.end());
-    }
-
-    BridgeRegionDisjointSet dsu(static_cast<int>(coreNodesByComponent.size()));
-    std::unordered_map<int, int> firstComponentByConnector;
-    for (int compIdx = 0; compIdx < static_cast<int>(connectorsByComponent.size()); ++compIdx) {
-        for (int connectorIdx : connectorsByComponent[static_cast<size_t>(compIdx)]) {
-            auto [it, inserted] = firstComponentByConnector.emplace(connectorIdx, compIdx);
-            if (!inserted) {
-                dsu.unite(compIdx, it->second);
-            }
-        }
-    }
-
-    std::unordered_map<int, std::vector<int>> nodesByRoot;
-    for (int compIdx = 0; compIdx < static_cast<int>(coreNodesByComponent.size()); ++compIdx) {
-        int root = dsu.find(compIdx);
-        auto& merged = nodesByRoot[root];
-        merged.insert(merged.end(),
-                      coreNodesByComponent[static_cast<size_t>(compIdx)].begin(),
-                      coreNodesByComponent[static_cast<size_t>(compIdx)].end());
-        merged.insert(merged.end(),
-                      connectorsByComponent[static_cast<size_t>(compIdx)].begin(),
-                      connectorsByComponent[static_cast<size_t>(compIdx)].end());
-    }
-
-    std::vector<std::pair<int, std::vector<int>>> orderedGroups;
-    orderedGroups.reserve(nodesByRoot.size());
-    for (auto& kv : nodesByRoot) {
-        auto& merged = kv.second;
         std::sort(merged.begin(), merged.end());
         merged.erase(std::unique(merged.begin(), merged.end()), merged.end());
-        if (static_cast<int>(merged.size()) < PathPlanningConstants::resolveBridgeRegionMinNodes()) {
-            continue;
-        }
         orderedGroups.push_back({merged.front(), std::move(merged)});
     }
 
