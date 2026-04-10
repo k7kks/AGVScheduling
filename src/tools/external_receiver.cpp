@@ -1142,6 +1142,8 @@ static bool handle_map_info(const json& j,
                             std::atomic<int>& mapId);
 static double reserve_near_conflict_threshold_mm();
 static std::vector<int> build_bridge_rule_node_ids(const MapInfo& mapInfo);
+static std::vector<std::vector<int>> detect_corridor_groups(
+    const MapInfo& mapInfo, const std::vector<int>& bridgeNodeIds);
 
 struct MapRuntimeContext {
     explicit MapRuntimeContext(int initialMapId,
@@ -1170,6 +1172,9 @@ struct MapRuntimeContext {
     int mapId = 0;
     std::string mapVersion;
     std::vector<int> bridgeRuleNodeIds;
+    // Per-corridor groups: each group is independently enforced (if any node
+    // in the group is occupied by another AGV, all nodes in the group are banned).
+    std::vector<std::vector<int>> corridorGroups;
     std::shared_mutex mapMutex;
     std::atomic<bool> mapReady;
     std::atomic<long long> mapEpoch;
@@ -1513,6 +1518,15 @@ static bool reload_context_map_payload(const json& j,
         ctx.activeMapId.store(resolvedMapId);
         ctx.mapVersion = detect_map_version_from_message(j);
         ctx.bridgeRuleNodeIds = build_bridge_rule_node_ids(*ctx.mapInfoPtr);
+        ctx.corridorGroups = detect_corridor_groups(*ctx.mapInfoPtr, ctx.bridgeRuleNodeIds);
+        if (!ctx.corridorGroups.empty()) {
+            int totalNodes = 0;
+            for (const auto& g : ctx.corridorGroups) totalNodes += static_cast<int>(g.size());
+            std::cout << log_time_prefix()
+                      << "[Map] corridor groups=" << ctx.corridorGroups.size()
+                      << " totalNodes=" << totalNodes
+                      << std::endl;
+        }
         ctx.mapReady.store(true);
         ctx.mapEpoch.fetch_add(1);
         if (!ctx.skipStaticTable) {
@@ -2572,7 +2586,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
     ReplanStage stage,
     bool* updatedOut,
     bool* usedTempGoalOut = nullptr,
-    const std::vector<int>* bridgeNodeIds = nullptr);
+    const std::vector<std::vector<int>>* corridorGroups = nullptr);
 
 static void processSchedulingMessage(
     json payload,
@@ -5131,6 +5145,98 @@ static std::vector<int> build_bridge_rule_node_ids(const MapInfo& mapInfo) {
     return out;
 }
 
+// Detect narrow corridors: chains of degree-≤-2 nodes between junction nodes.
+// Each corridor group is independently enforced as a mutex (one AGV at a time).
+// Bridge region nodes from build_bridge_rule_node_ids are also grouped per region.
+static std::vector<std::vector<int>> detect_corridor_groups(
+    const MapInfo& mapInfo,
+    const std::vector<int>& bridgeNodeIds) {
+
+    const int minCorridorLen = std::max(2, getenv_int("CORRIDOR_MIN_LENGTH", 3));
+    std::vector<std::vector<int>> groups;
+
+    // Step 1: group bridge nodes by graph-analysis region
+    if (!bridgeNodeIds.empty()) {
+        std::vector<int> regionByIndex;
+        std::vector<int> seedIndices;
+        std::vector<char> bridgeMask;
+        int regionCount = build_graph_regions(mapInfo, 1, regionByIndex,
+                                               seedIndices, &bridgeMask, true);
+        if (regionCount > 0 && !regionByIndex.empty() && !bridgeMask.empty()) {
+            std::unordered_set<int> bridgeSet(bridgeNodeIds.begin(), bridgeNodeIds.end());
+            std::unordered_map<int, std::vector<int>> regionNodes;
+            const auto& nodes = mapInfo.getNodes();
+            for (size_t i = 0; i < nodes.size() && i < regionByIndex.size(); ++i) {
+                if (bridgeSet.count(nodes[i].id) > 0) {
+                    regionNodes[regionByIndex[i]].push_back(nodes[i].id);
+                }
+            }
+            for (auto& kv : regionNodes) {
+                if (static_cast<int>(kv.second.size()) >= minCorridorLen) {
+                    groups.push_back(std::move(kv.second));
+                }
+            }
+        }
+    }
+
+    // Step 2: detect narrow corridors from topology (chains of degree-≤-2 nodes)
+    const auto& aftNode = mapInfo.getAftNode();
+    const auto& preNode = mapInfo.getPreNode();
+    // Build undirected degree map
+    std::unordered_map<int, std::unordered_set<int>> undirAdj;
+    for (const auto& kv : aftNode) {
+        for (int nbr : kv.second) {
+            undirAdj[kv.first].insert(nbr);
+            undirAdj[nbr].insert(kv.first);
+        }
+    }
+    for (const auto& kv : preNode) {
+        for (int nbr : kv.second) {
+            undirAdj[kv.first].insert(nbr);
+            undirAdj[nbr].insert(kv.first);
+        }
+    }
+    // Collect narrow nodes (undirected degree exactly 2)
+    std::unordered_set<int> narrowNodes;
+    for (const auto& kv : undirAdj) {
+        if (kv.second.size() == 2) {
+            narrowNodes.insert(kv.first);
+        }
+    }
+    // Already covered by bridge groups
+    std::unordered_set<int> coveredNodes;
+    for (const auto& g : groups) {
+        for (int nid : g) coveredNodes.insert(nid);
+    }
+    // Trace chains of narrow nodes
+    std::unordered_set<int> visited;
+    for (int startNode : narrowNodes) {
+        if (visited.count(startNode) > 0) continue;
+        if (coveredNodes.count(startNode) > 0) continue;
+        // BFS/DFS along narrow nodes
+        std::vector<int> chain;
+        std::deque<int> q;
+        q.push_back(startNode);
+        visited.insert(startNode);
+        while (!q.empty()) {
+            int cur = q.front(); q.pop_front();
+            chain.push_back(cur);
+            for (int nbr : undirAdj[cur]) {
+                if (visited.count(nbr) > 0) continue;
+                if (narrowNodes.count(nbr) == 0) continue;
+                if (coveredNodes.count(nbr) > 0) continue;
+                visited.insert(nbr);
+                q.push_back(nbr);
+            }
+        }
+        if (static_cast<int>(chain.size()) >= minCorridorLen) {
+            groups.push_back(std::move(chain));
+        }
+    }
+
+    return groups;
+}
+
 static RegionCongestionInfo build_region_congestion_info(
     const MapInfo& mapInfo,
     const std::vector<RobotStatusEntry>& statuses) {
@@ -5949,7 +6055,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
     ReplanStage stage,
     bool* updatedOut,
     bool* usedTempGoalOut,
-    const std::vector<int>* bridgeNodeIds) {
+    const std::vector<std::vector<int>>* corridorGroups) {
     PathPlanningHelper::AmrPlanInfo out;
     out.amrId = deviceId;
     out.startNodeId = startNodeId;
@@ -6657,21 +6763,23 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
         merge_region_congestion(region, congestion);
         mark_ms(profile.regionMs, t0);
     }
-    // Bridge reservation enforcement: if any bridge node is reserved by another AGV,
-    // ban ALL bridge nodes from planning. This prevents multiple AGVs from entering
-    // a bridge region simultaneously even when position-based counting shows 0 inside.
-    if (enableCongestionAvoid && bridgeNodeIds && !bridgeNodeIds->empty()) {
-        bool bridgeOccupied = false;
-        for (int bNodeId : *bridgeNodeIds) {
-            auto hold = reservations.findBlockingHold(bNodeId, deviceId);
-            if (hold.has_value()) {
-                bridgeOccupied = true;
-                break;
+    // Per-corridor direction lock: for each corridor group, if any node is reserved
+    // by another AGV, ban ALL nodes in that group. This prevents opposing-direction
+    // entry into narrow corridors and bridge regions.
+    if (enableCongestionAvoid && corridorGroups && !corridorGroups->empty()) {
+        for (const auto& group : *corridorGroups) {
+            bool occupied = false;
+            for (int gNodeId : group) {
+                auto hold = reservations.findBlockingHold(gNodeId, deviceId);
+                if (hold.has_value()) {
+                    occupied = true;
+                    break;
+                }
             }
-        }
-        if (bridgeOccupied) {
-            for (int bNodeId : *bridgeNodeIds) {
-                congestion.hardBlocked.insert(bNodeId);
+            if (occupied) {
+                for (int gNodeId : group) {
+                    congestion.hardBlocked.insert(gNodeId);
+                }
             }
         }
     }
@@ -7654,7 +7762,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_with_throttle(
     int reserveBudgetOverride,
     int minIntervalMs,
     bool* usedCacheOut,
-    const std::vector<int>* bridgeNodeIds = nullptr) {
+    const std::vector<std::vector<int>>* corridorGroups = nullptr) {
     if (usedCacheOut) *usedCacheOut = false;
     int baseIntervalMs = (minIntervalMs > 0) ? minIntervalMs : 200;
     int effectiveIntervalMs = baseIntervalMs;
@@ -7708,7 +7816,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_with_throttle(
         stage,
         &planUpdated,
         &usedTempGoal,
-        bridgeNodeIds);
+        corridorGroups);
     if (effectiveIntervalMs > 0) {
         if (planUpdated) {
             bool refreshClock = (stage != ReplanStage::FAST) || usedTempGoal;
@@ -10591,7 +10699,7 @@ int main() {
                                     reserveBudgetOverride,
                                     baseIntervalMs,
                                     nullptr,
-                                    ctx->bridgeRuleNodeIds.empty() ? nullptr : &ctx->bridgeRuleNodeIds);
+                                    ctx->corridorGroups.empty() ? nullptr : &ctx->corridorGroups);
                             }
                             if (profileSummary) {
                                 const auto jobMs = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -10657,7 +10765,7 @@ int main() {
                                                     reserveBudgetOverride,
                                                     baseIntervalMs,
                                                     nullptr,
-                                                    ctx->bridgeRuleNodeIds.empty() ? nullptr : &ctx->bridgeRuleNodeIds);
+                                                    ctx->corridorGroups.empty() ? nullptr : &ctx->corridorGroups);
                                             }
                                         }
                                     }
@@ -11311,7 +11419,7 @@ int main() {
                     ReplanStage::NONE,
                     &dynamicUpdated,
                     &usedTempGoal,
-                    ctx->bridgeRuleNodeIds.empty() ? nullptr : &ctx->bridgeRuleNodeIds);
+                    ctx->corridorGroups.empty() ? nullptr : &ctx->corridorGroups);
                 ctx->robotRepo.updateDynamicPlan(
                     deviceId,
                     dynamicPlan,
