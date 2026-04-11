@@ -1008,6 +1008,21 @@ public:
             rt.deadlockYieldUntil = std::chrono::steady_clock::time_point{};
             rt.deadlockCycleSize = 0;
         }
+        // Prune expired deadlock pair history entries
+        if (!rt.deadlockPairHistory.empty()) {
+            const auto now = std::chrono::steady_clock::now();
+            const int windowMs = getenv_int("DEADLOCK_HISTORY_WINDOW_MS", 30000);
+            const auto window = std::chrono::milliseconds(windowMs);
+            for (auto it = rt.deadlockPairHistory.begin();
+                 it != rt.deadlockPairHistory.end();) {
+                if (it->second.lastSeen != std::chrono::steady_clock::time_point{} &&
+                    (now - it->second.lastSeen) > window) {
+                    it = rt.deadlockPairHistory.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
     }
 
     void enforceSubTaskLimit(TrailProgressInfo& prog,
@@ -5147,7 +5162,7 @@ static std::vector<int> build_bridge_rule_node_ids(const MapInfo& mapInfo) {
 
 // Detect narrow corridors: chains of degree-≤-2 nodes between junction nodes.
 // Each corridor group is independently enforced as a mutex (one AGV at a time).
-// Bridge region nodes from build_bridge_rule_node_ids are also grouped per region.
+// Bridge nodes are grouped by connected components on the bridge subgraph.
 static std::vector<std::vector<int>> detect_corridor_groups(
     const MapInfo& mapInfo,
     const std::vector<int>& bridgeNodeIds) {
@@ -5155,34 +5170,9 @@ static std::vector<std::vector<int>> detect_corridor_groups(
     const int minCorridorLen = std::max(2, getenv_int("CORRIDOR_MIN_LENGTH", 3));
     std::vector<std::vector<int>> groups;
 
-    // Step 1: group bridge nodes by graph-analysis region
-    if (!bridgeNodeIds.empty()) {
-        std::vector<int> regionByIndex;
-        std::vector<int> seedIndices;
-        std::vector<char> bridgeMask;
-        int regionCount = build_graph_regions(mapInfo, 1, regionByIndex,
-                                               seedIndices, &bridgeMask, true);
-        if (regionCount > 0 && !regionByIndex.empty() && !bridgeMask.empty()) {
-            std::unordered_set<int> bridgeSet(bridgeNodeIds.begin(), bridgeNodeIds.end());
-            std::unordered_map<int, std::vector<int>> regionNodes;
-            const auto& nodes = mapInfo.getNodes();
-            for (size_t i = 0; i < nodes.size() && i < regionByIndex.size(); ++i) {
-                if (bridgeSet.count(nodes[i].id) > 0) {
-                    regionNodes[regionByIndex[i]].push_back(nodes[i].id);
-                }
-            }
-            for (auto& kv : regionNodes) {
-                if (static_cast<int>(kv.second.size()) >= minCorridorLen) {
-                    groups.push_back(std::move(kv.second));
-                }
-            }
-        }
-    }
-
-    // Step 2: detect narrow corridors from topology (chains of degree-≤-2 nodes)
+    // Build undirected adjacency (shared by both steps)
     const auto& aftNode = mapInfo.getAftNode();
     const auto& preNode = mapInfo.getPreNode();
-    // Build undirected degree map
     std::unordered_map<int, std::unordered_set<int>> undirAdj;
     for (const auto& kv : aftNode) {
         for (int nbr : kv.second) {
@@ -5196,6 +5186,37 @@ static std::vector<std::vector<int>> detect_corridor_groups(
             undirAdj[nbr].insert(kv.first);
         }
     }
+
+    // Step 1: group bridge nodes by connected components on the bridge subgraph.
+    // Only edges between two bridge nodes count — this ensures physically
+    // separate bridge segments are never merged into one group.
+    if (!bridgeNodeIds.empty()) {
+        std::unordered_set<int> bridgeSet(bridgeNodeIds.begin(), bridgeNodeIds.end());
+        std::unordered_set<int> visited;
+        for (int seed : bridgeNodeIds) {
+            if (visited.count(seed) > 0) continue;
+            std::vector<int> component;
+            std::deque<int> q;
+            q.push_back(seed);
+            visited.insert(seed);
+            while (!q.empty()) {
+                int cur = q.front(); q.pop_front();
+                component.push_back(cur);
+                auto adjIt = undirAdj.find(cur);
+                if (adjIt == undirAdj.end()) continue;
+                for (int nbr : adjIt->second) {
+                    if (visited.count(nbr) > 0) continue;
+                    if (bridgeSet.count(nbr) == 0) continue;
+                    visited.insert(nbr);
+                    q.push_back(nbr);
+                }
+            }
+            if (static_cast<int>(component.size()) >= minCorridorLen) {
+                groups.push_back(std::move(component));
+            }
+        }
+    }
+    // Step 2: detect narrow corridors from topology (chains of degree-≤-2 nodes)
     // Collect narrow nodes (undirected degree exactly 2)
     std::unordered_set<int> narrowNodes;
     for (const auto& kv : undirAdj) {
@@ -8040,9 +8061,12 @@ static std::vector<DeadlockVictim> detect_deadlock_victims(
             if (staleMs > 0 && rt.blockedByUpdatedAt != std::chrono::steady_clock::time_point{}) {
                 if ((now - rt.blockedByUpdatedAt) > std::chrono::milliseconds(staleMs)) continue;
             }
-            // Check speed
+            // Check speed of blocked AGV
             auto stOpt = repo.getStatusById(deviceId);
             if (!stOpt.has_value() || std::abs(stOpt->speed) > speedEps) continue;
+            // If blocker is moving, this is normal queuing — not a stall
+            auto blockerStOpt = repo.getStatusById(rt.blockedByAgvId);
+            if (blockerStOpt.has_value() && std::abs(blockerStOpt->speed) > speedEps) continue;
             // Check not already yielding
             if (rt.deadlockYieldUntil != std::chrono::steady_clock::time_point{} &&
                 now < rt.deadlockYieldUntil) continue;
