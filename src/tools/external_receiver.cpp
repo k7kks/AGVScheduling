@@ -5833,7 +5833,10 @@ static std::optional<int> select_temp_goal_node(const MapInfo& mapInfo,
                                                 const std::unordered_map<int, double>* nodeScore,
                                                 double lowScoreThreshold,
                                                 const RegionCongestionInfo* region,
-                                                int goalNodeId) {
+                                                int goalNodeId,
+                                                double blockerX = 0.0,
+                                                double blockerY = 0.0,
+                                                bool hasBlocker = false) {
     if (currentNodeId < 0) return std::nullopt;
 
     double cx = 0.0, cy = 0.0;
@@ -5916,6 +5919,15 @@ static std::optional<int> select_temp_goal_node(const MapInfo& mapInfo,
         double dx = nx - ax;
         double dy = ny - ay;
         double d2 = dx * dx + dy * dy;
+        // When blocker is known, compute distance from candidate to blocker.
+        // We want to MAXIMIZE this (move away from blocker), so store as
+        // negative to fit into the "minimize bestDist" framework.
+        double blockerDist2 = 0.0;
+        if (hasBlocker) {
+            double bdx = nx - blockerX;
+            double bdy = ny - blockerY;
+            blockerDist2 = -(bdx * bdx + bdy * bdy);  // negative = farther is better
+        }
         double minC = 0.0;
         if (!congestionPos.empty()) {
             minC = std::numeric_limits<double>::infinity();
@@ -5933,6 +5945,9 @@ static std::optional<int> select_temp_goal_node(const MapInfo& mapInfo,
         } else if (std::abs(score - bestScore) <= 1e-9) {
             if (!congestionPos.empty()) {
                 if (minC > bestCongest) better = true;
+            } else if (hasBlocker && !requireNearGoal) {
+                // Primary: move away from blocker (smaller negative = farther)
+                if (blockerDist2 < bestDist) better = true;
             } else if (d2 < bestDist) {
                 better = true;
             }
@@ -5940,7 +5955,7 @@ static std::optional<int> select_temp_goal_node(const MapInfo& mapInfo,
         if (better) {
             bestScore = score;
             bestCongest = minC;
-            bestDist = d2;
+            bestDist = hasBlocker && !requireNearGoal ? blockerDist2 : d2;
             bestNode = nodeId;
         }
     };
@@ -7057,6 +7072,35 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
         rt.tempGoalBans[nodeId] = now;
     };
 
+    // Blocker-aware tempGoal: get blocker position so yield moves AWAY from blocker
+    double blockerPosX = 0.0, blockerPosY = 0.0;
+    bool hasBlockerPos = false;
+    if (!rt.blockedByAgvId.empty()) {
+        auto blockerStatus = repo.getStatusById(rt.blockedByAgvId);
+        if (blockerStatus.has_value()) {
+            blockerPosX = blockerStatus->x;
+            blockerPosY = blockerStatus->y;
+            hasBlockerPos = true;
+        }
+    }
+
+    // Corridor-exit tempGoal: if current node is in a corridor group, ban all
+    // corridor nodes so the tempGoal is selected OUTSIDE the corridor.
+    std::unordered_set<int> corridorBanNodes;
+    if (corridorGroups && !corridorGroups->empty()) {
+        for (const auto& group : *corridorGroups) {
+            bool selfInGroup = false;
+            for (int nid : group) {
+                if (nid == startNodeId) { selfInGroup = true; break; }
+            }
+            if (selfInGroup) {
+                for (int nid : group) {
+                    corridorBanNodes.insert(nid);
+                }
+            }
+        }
+    }
+
     auto try_plan_temp_goal = [&](std::unordered_set<int>& tempBanned, bool allowSelectNew) -> bool {
         if (tempGoalBanMs > 0 && !rt.tempGoalBans.empty()) {
             for (const auto& kv : rt.tempGoalBans) {
@@ -7067,6 +7111,10 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
             for (int nodeId : rt.tempGoalTabu) {
                 tempBanned.insert(nodeId);
             }
+        }
+        // Ban all corridor nodes if self is inside a corridor — force exit
+        for (int nid : corridorBanNodes) {
+            tempBanned.insert(nid);
         }
         while (true) {
             if (rt.tempGoalNodeId >= 0 && tempGoalBanMs > 0 &&
@@ -7088,7 +7136,10 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
                                                  enableCongestionAvoid ? &congestion.nodeScore : nullptr,
                                                  tempLowScore,
                                                  enableCongestionAvoid ? &region : nullptr,
-                                                 primaryGoal);
+                                                 primaryGoal,
+                                                 blockerPosX,
+                                                 blockerPosY,
+                                                 hasBlockerPos);
                 if (!tmp.has_value()) return false;
                 rt.tempGoalNodeId = *tmp;
                 if (logSummary) {
@@ -7097,8 +7148,8 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
                               << " start=" << startNodeId
                               << " temp=" << rt.tempGoalNodeId
                               << " banned=" << tempBanned.size()
-                              << " congHard=" << congestion.hardBlocked.size()
-                              << " regionHard=" << region.hardBlockedNodes.size()
+                              << " corridorBan=" << corridorBanNodes.size()
+                              << " blocker=" << (hasBlockerPos ? rt.blockedByAgvId : "none")
                               << std::endl;
                 }
             }
