@@ -290,6 +290,8 @@ class ReplayRecorder:
         self._frame_count = 0
         self._event_count = 0
         self._last_event_sim_s = 0.0
+        self._meta_flush_interval_s = max(0.5, _safe_float(env("SIM_REPLAY_META_FLUSH_SEC", "3.0"), 3.0))
+        self._last_meta_flush_monotonic = time.monotonic()
         self._last_path_signature: Dict[str, Tuple[int, ...]] = {}
         self._last_trail_signature: Dict[str, Tuple[int, ...]] = {}
         self._last_reserved_signature = ""
@@ -321,6 +323,13 @@ class ReplayRecorder:
             json.dumps(session_json, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+    def _maybe_flush_session_meta(self, *, force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and (now - self._last_meta_flush_monotonic) < self._meta_flush_interval_s:
+            return
+        self._write_session_meta()
+        self._last_meta_flush_monotonic = now
 
     def _write_jsonl(self, fp: Any, payload: Dict[str, Any]) -> None:
         fp.write(json.dumps(payload, ensure_ascii=False) + "\n")
@@ -433,6 +442,7 @@ class ReplayRecorder:
         event.update(payload)
         self._write_jsonl(self._events_fp, event)
         self._event_count += 1
+        self._maybe_flush_session_meta()
 
     def maybe_record_frame(self, payload: Dict[str, Any]) -> None:
         sim_time_s = _safe_float(payload.get("sim_time_s"), 0.0)
@@ -444,13 +454,16 @@ class ReplayRecorder:
         self._last_frame_sim_s = sim_time_s
         self._last_event_sim_s = max(self._last_event_sim_s, sim_time_s)
         self._frame_count += 1
+        self._maybe_flush_session_meta()
 
     def close(self) -> None:
         try:
             self._frames_fp.close()
         finally:
-            self._events_fp.close()
-            self._write_session_meta()
+            try:
+                self._events_fp.close()
+            finally:
+                self._maybe_flush_session_meta(force=True)
 
 
 class TaskPool:
@@ -2140,6 +2153,24 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--loop-task-max-count", type=int, default=1)
     p.add_argument("--loop-task-min-delay", type=float, default=0.3)
     p.add_argument("--loop-task-max-delay", type=float, default=0.8)
+    p.add_argument(
+        "--auto-stop-idle-sec",
+        type=float,
+        default=_safe_float(env("SIM_AUTO_STOP_IDLE_SEC", "0"), 0.0),
+        help="Auto-exit after all AGVs stay idle and no tasks remain for this many seconds; 0 disables.",
+    )
+    p.add_argument(
+        "--auto-stop-min-runtime-sec",
+        type=float,
+        default=_safe_float(env("SIM_AUTO_STOP_MIN_RUNTIME_SEC", "0"), 0.0),
+        help="Minimum wall-clock runtime before idle auto-stop can trigger.",
+    )
+    p.add_argument(
+        "--max-sim-time-sec",
+        type=float,
+        default=_safe_float(env("SIM_MAX_SIM_TIME_SEC", "0"), 0.0),
+        help="Hard cap for simulated time; 0 disables.",
+    )
 
     p.add_argument("--no-vis", action="store_true", help="Disable web visualization")
     p.add_argument("--vis-host", default=env("SIM_V2_VIS_HOST", "127.0.0.1"), help="Web UI host to bind")
@@ -2552,10 +2583,23 @@ def main() -> int:
     next_pool_dispatch = time.monotonic() + pending_pool_dispatch_interval_s
     status_interval_s = max(0.0, float(args.status_interval))
     last_tick = time.monotonic()
+    run_started_at = last_tick
     loop_rng = random.Random(int(args.seed) + 1000)
     loop_cycle = 0
     loop_deadline: Optional[float] = None
     attach_status = not args.no_attach_status
+    auto_stop_idle_s = max(0.0, float(args.auto_stop_idle_sec))
+    auto_stop_min_runtime_s = max(0.0, float(args.auto_stop_min_runtime_sec))
+    max_sim_time_s = max(0.0, float(args.max_sim_time_sec))
+    auto_stop_idle_since: Optional[float] = None
+    auto_stop_work_seen = bool(tasks_payload) or task_pool.size() > 0
+    if auto_stop_idle_s > 0.0:
+        print(
+            f"[sim_v2] auto-stop enabled: idle={auto_stop_idle_s:.1f}s min_runtime={auto_stop_min_runtime_s:.1f}s",
+            file=sys.stderr,
+        )
+    if max_sim_time_s > 0.0:
+        print(f"[sim_v2] max-sim-time enabled: {max_sim_time_s:.1f}s", file=sys.stderr)
     status_thread: Optional[threading.Thread] = None
     if args.run and status_list and status_interval_s > 0.0:
         def status_loop() -> None:
@@ -2623,6 +2667,29 @@ def main() -> int:
                 if device_is_idle(device_id, st):
                     idle_devices.append(device_id)
             idle_devices.sort()
+            pending_task_count = task_pool.size()
+            if assigned_set or pending_task_count > 0 or any(paths.values()) or any(trails.values()):
+                auto_stop_work_seen = True
+
+            if auto_stop_idle_s > 0.0 and not args.loop_tasks:
+                all_idle = bool(all_devices) and len(idle_devices) == len(all_devices)
+                if (
+                    auto_stop_work_seen
+                    and pending_task_count == 0
+                    and not assigned_set
+                    and all_idle
+                    and (now - run_started_at) >= auto_stop_min_runtime_s
+                ):
+                    if auto_stop_idle_since is None:
+                        auto_stop_idle_since = now
+                    elif (now - auto_stop_idle_since) >= auto_stop_idle_s:
+                        print(
+                            f"[sim_v2] auto-stop: idle for {auto_stop_idle_s:.1f}s after {now - run_started_at:.1f}s runtime",
+                            file=sys.stderr,
+                        )
+                        break
+                else:
+                    auto_stop_idle_since = None
 
             if args.loop_tasks:
                 trigger_devices: List[str] = []
@@ -2756,6 +2823,13 @@ def main() -> int:
                         max_points=int(args.record_max_points),
                     )
                 )
+            current_sim_time_s = state.sim_time_s()
+            if max_sim_time_s > 0.0 and current_sim_time_s >= max_sim_time_s:
+                print(
+                    f"[sim_v2] max-sim-time reached: {current_sim_time_s:.1f}s >= {max_sim_time_s:.1f}s",
+                    file=sys.stderr,
+                )
+                break
             if status_list and status_interval_s <= 0.0:
                 sim.send_status(publisher, state.snapshot_status_list())
 

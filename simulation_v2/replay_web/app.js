@@ -43,6 +43,8 @@ const replay = {
   frames: [],
   frameTimes: [],
   timeline: [],
+  scenes: [],
+  firstPaths: {},
   summary: null,
   totalTimeS: 0,
   directorBaseRate: 2.8,
@@ -53,16 +55,18 @@ const replay = {
   autoFocus: true,
   autoMainCamera: true,
   highlightFocus: true,
-  showReserved: true,
-  displayMode: "both",
+  showReserved: false,
+  showBridges: true,
+  displayMode: "trail",
   followAgvId: "",
   lastTickTs: 0,
   mainCamera: createCameraState(),
   focusCamera: createCameraState(),
   ui: {
-    eventListBuilt: false,
-    activeEventId: "",
-    lastScrolledEventId: "",
+    sceneListBuilt: false,
+    activeSceneId: "",
+    lastScrolledSceneId: "",
+    lastDetailKey: "",
   },
 };
 
@@ -155,6 +159,22 @@ function currentFrame() {
   return replay.frames[currentFrameIndex()] || { agvs: [], reserved_nodes: [] };
 }
 
+function currentSceneAt(timeS) {
+  if (!Array.isArray(replay.scenes) || !replay.scenes.length) return null;
+  for (const scene of replay.scenes) {
+    const startS = Number(scene.start_s || 0);
+    const endS = Number(scene.end_s ?? startS);
+    if (timeS >= startS && timeS <= endS) {
+      return scene;
+    }
+  }
+  return null;
+}
+
+function currentScene() {
+  return currentSceneAt(replay.currentTimeS);
+}
+
 function currentEventAt(timeS) {
   for (const item of replay.timeline) {
     const startS = Number(item.start_s || 0);
@@ -206,13 +226,16 @@ function cueBlendFactor(event, timeS) {
 }
 
 function effectiveSpeedAt(timeS) {
+  const scene = currentSceneAt(timeS);
   if (!replay.autoDirector) {
     return replay.globalSpeed;
   }
   const baseRate = replay.directorBaseRate;
   const cue = currentCueAt(timeS);
   if (!cue) {
-    return baseRate * replay.globalSpeed;
+    const sceneRate = Number(scene?.playback_rate || 0);
+    const rate = Number.isFinite(sceneRate) && sceneRate > 0 ? sceneRate : baseRate;
+    return rate * replay.globalSpeed;
   }
   const cueRate = Number(cue.playback_rate);
   const eventRate = Number.isFinite(cueRate) && cueRate > 0 ? cueRate : 1;
@@ -265,9 +288,10 @@ function allAgvIds() {
 }
 
 function focusDescriptor(frame, event) {
+  const scene = currentScene();
   const agvIds = new Set();
   const nodeIds = new Set();
-  const rawFocus = event?.focus || {};
+  const rawFocus = event?.focus || scene?.focus || {};
   for (const agvId of rawFocus.agv_ids || []) {
     const value = String(agvId || "").trim();
     if (value) agvIds.add(value);
@@ -285,6 +309,13 @@ function focusDescriptor(frame, event) {
       parseNodeId(followAgv?.nextNodeId),
       parseNodeId(followAgv?.nextSubtask?.nodeId),
     ];
+    const firstPath = replay.firstPaths?.[replay.followAgvId];
+    if (firstPath && Array.isArray(firstPath.node_ids)) {
+      for (const value of firstPath.node_ids.slice(0, 16)) {
+        const parsed = parseNodeId(value);
+        if (parsed !== null) followNodes.push(parsed);
+      }
+    }
     for (const nodeId of followNodes) {
       if (nodeId !== null) nodeIds.add(nodeId);
     }
@@ -301,7 +332,7 @@ function focusDescriptor(frame, event) {
     agvIds: Array.from(agvIds),
     nodeIds: Array.from(nodeIds),
     zoom: Math.max(1.0, Number(rawFocus.zoom || (replay.followAgvId ? 1.8 : 1.3)) || 1.3),
-    mode: String(rawFocus.mode || (replay.followAgvId ? "follow" : "auto")),
+    mode: String(rawFocus.mode || (replay.followAgvId ? "path" : "auto")),
   };
 }
 
@@ -329,6 +360,12 @@ function collectFocusPoints(frame, focus) {
           : [...(agv.trail || []).slice(0, 6), ...(agv.path || []).slice(0, 6)];
     for (const pt of routePoints.slice(0, 6)) {
       pushPoint(pt.x, pt.y);
+    }
+    const firstPath = replay.firstPaths?.[agvId];
+    if (firstPath && Array.isArray(firstPath.points)) {
+      for (const pt of firstPath.points.slice(0, 16)) {
+        pushPoint(pt.x, pt.y);
+      }
     }
   }
 
@@ -401,7 +438,7 @@ function cameraTarget(frame, event, variant) {
         zoom: clamp(replay.mainCamera.targetZoom || replay.mainCamera.zoom || 1, ZOOM_MIN, ZOOM_MAX),
       };
     }
-    if (!event && !replay.followAgvId) {
+    if (!event && !replay.followAgvId && focus.agvIds.length === 0 && focus.nodeIds.length === 0) {
       return { centerX: wholeCenter.x, centerY: wholeCenter.y, zoom: 1 };
     }
     const desired = event ? focus.zoom * 0.58 : 1.28;
@@ -487,6 +524,48 @@ function drawMap(ctx, canvas, transform) {
   ctx.restore();
 }
 
+function drawBridges(ctx, transform) {
+  if (!replay.showBridges) return;
+  const bridgeEdges = Array.isArray(replay.map?.bridgeEdges) ? replay.map.bridgeEdges : [];
+  const bridgeNodeIds = Array.isArray(replay.map?.bridgeNodeIds) ? replay.map.bridgeNodeIds : [];
+  const nodePos = replay.map?.nodePositions || {};
+  if (bridgeEdges.length) {
+    ctx.save();
+    ctx.strokeStyle = "rgba(234, 88, 12, 0.95)";
+    ctx.lineWidth = 4;
+    ctx.globalAlpha = 0.78;
+    for (const edge of bridgeEdges) {
+      const a = nodePos[String(edge.startNode)];
+      const b = nodePos[String(edge.endNode)];
+      if (!a || !b) continue;
+      const p0 = transform.toCanvas(a.x, a.y);
+      const p1 = transform.toCanvas(b.x, b.y);
+      ctx.beginPath();
+      ctx.moveTo(p0.cx, p0.cy);
+      ctx.lineTo(p1.cx, p1.cy);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  if (bridgeNodeIds.length) {
+    ctx.save();
+    for (const rawId of bridgeNodeIds) {
+      const pos = nodePos[String(rawId)];
+      if (!pos) continue;
+      const p = transform.toCanvas(pos.x, pos.y);
+      ctx.beginPath();
+      ctx.arc(p.cx, p.cy, 8, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(251, 146, 60, 0.18)";
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(p.cx, p.cy, 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(234, 88, 12, 0.96)";
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
 function drawBackdrop(ctx, canvas, focus, event) {
   const active = replay.highlightFocus && (Boolean(event) || Boolean(replay.followAgvId));
   if (!active) return;
@@ -561,6 +640,76 @@ function drawFocusNodes(ctx, transform, focus) {
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
     ctx.fillText(`N${nid}`, p.cx, p.cy - 16);
+  }
+  ctx.restore();
+}
+
+function drawSelectedFirstPath(ctx, transform) {
+  const agvId = String(replay.followAgvId || "").trim();
+  if (!agvId) return;
+  const pathInfo = replay.firstPaths?.[agvId];
+  if (!pathInfo || !Array.isArray(pathInfo.points) || pathInfo.points.length < 2) return;
+  ctx.save();
+  ctx.shadowColor = "rgba(8, 145, 178, 0.45)";
+  ctx.shadowBlur = 18;
+  drawPolyline(ctx, transform, pathInfo.points, {
+    color: "#0891b2",
+    width: 6.2,
+    alpha: 0.98,
+  });
+  const first = pathInfo.points[0];
+  const second = pathInfo.points[Math.min(pathInfo.points.length - 1, 1)];
+  const end = pathInfo.points[pathInfo.points.length - 1];
+  const subtask = pathInfo.first_subtask;
+  if (first) {
+    const p = transform.toCanvas(first.x, first.y);
+    ctx.beginPath();
+    ctx.arc(p.cx, p.cy, 7, 0, Math.PI * 2);
+    ctx.fillStyle = "#67e8f9";
+    ctx.fill();
+  }
+  if (end) {
+    const p = transform.toCanvas(end.x, end.y);
+    ctx.beginPath();
+    ctx.arc(p.cx, p.cy, 8, 0, Math.PI * 2);
+    ctx.strokeStyle = "#67e8f9";
+    ctx.lineWidth = 2.4;
+    ctx.stroke();
+    ctx.font = "bold 12px Arial";
+    ctx.fillStyle = "#67e8f9";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "bottom";
+    ctx.fillText("首次 Path", p.cx + 10, p.cy - 6);
+  }
+  if (subtask && Number.isFinite(Number(subtask.x)) && Number.isFinite(Number(subtask.y))) {
+    const p = transform.toCanvas(Number(subtask.x), Number(subtask.y));
+    ctx.beginPath();
+    ctx.arc(p.cx, p.cy, 10, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255, 214, 102, 0.18)";
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(p.cx, p.cy, 5.5, 0, Math.PI * 2);
+    ctx.fillStyle = "#ffd166";
+    ctx.fill();
+    ctx.font = "bold 12px Arial";
+    ctx.fillStyle = "#ffd166";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "bottom";
+    ctx.fillText("首个子任务点", p.cx + 12, p.cy - 4);
+  }
+  if (first && second) {
+    const p0 = transform.toCanvas(first.x, first.y);
+    const p1 = transform.toCanvas(second.x, second.y);
+    const angle = Math.atan2(p1.cy - p0.cy, p1.cx - p0.cx);
+    ctx.translate(p1.cx, p1.cy);
+    ctx.rotate(angle);
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(-11, -5);
+    ctx.lineTo(-11, 5);
+    ctx.closePath();
+    ctx.fillStyle = "#0891b2";
+    ctx.fill();
   }
   ctx.restore();
 }
@@ -652,14 +801,71 @@ function drawScene(ctx, canvas, frame, event, variant) {
   const focus = focusDescriptor(frame, event);
   const transform = createTransform(canvas, variant === "main" ? replay.mainCamera : replay.focusCamera);
   drawMap(ctx, canvas, transform);
+  drawBridges(ctx, transform);
   drawBackdrop(ctx, canvas, focus, event);
   drawReserved(ctx, transform, frame, focus);
   drawAgvs(ctx, transform, frame, focus, event);
+  drawSelectedFirstPath(ctx, transform);
   drawFocusNodes(ctx, transform, focus);
 }
 
 function formatTime(seconds) {
   return `${Number(seconds || 0).toFixed(1)}s`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function bindScrollablePanes(root = document) {
+  for (const pane of root.querySelectorAll(".scroll-pane")) {
+    if (pane.dataset.scrollBound === "1") continue;
+    pane.dataset.scrollBound = "1";
+    let dragging = false;
+    let pointerId = null;
+    let startY = 0;
+    let startScrollTop = 0;
+    let moved = false;
+    pane.addEventListener("pointerdown", (event) => {
+      dragging = true;
+      moved = false;
+      pointerId = event.pointerId;
+      startY = event.clientY;
+      startScrollTop = pane.scrollTop;
+      pane.classList.add("dragging");
+      pane.setPointerCapture(event.pointerId);
+    });
+    pane.addEventListener("pointermove", (event) => {
+      if (!dragging || pointerId !== event.pointerId) return;
+      const deltaY = event.clientY - startY;
+      if (Math.abs(deltaY) > 4) moved = true;
+      pane.scrollTop = startScrollTop - deltaY;
+    });
+    const stopDrag = (event) => {
+      if (!dragging) return;
+      if (event?.pointerId !== undefined && pointerId !== event.pointerId) return;
+      dragging = false;
+      pointerId = null;
+      pane.classList.remove("dragging");
+    };
+    pane.addEventListener("pointerup", stopDrag);
+    pane.addEventListener("pointercancel", stopDrag);
+    pane.addEventListener(
+      "click",
+      (event) => {
+        if (moved) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      },
+      true
+    );
+  }
 }
 
 function updateStageBadges(event) {
@@ -690,80 +896,177 @@ function updateStageBadges(event) {
   }
 
   if (replay.autoMainCamera) {
-    cameraBadge.textContent = replay.followAgvId ? `主镜头 跟随 ${replay.followAgvId}` : "主镜头 自动";
+    cameraBadge.textContent = replay.followAgvId ? `主镜头跟随 ${replay.followAgvId}` : "主镜头自动";
   } else {
-    cameraBadge.textContent = "主镜头 手动";
+    cameraBadge.textContent = "主镜头手动";
   }
+}
+
+function renderDetailCards(scene) {
+  const root = document.getElementById("detail-content");
+  if (!root) return;
+  if (!scene || !Array.isArray(scene.cards)) {
+    root.innerHTML = "";
+    return;
+  }
+  const blocks = [];
+  for (const card of scene.cards) {
+    const type = String(card.type || "");
+    if (type === "task_input") {
+      const items = Array.isArray(card.items) ? card.items : [];
+      blocks.push(`
+        <div class="detail-card">
+          <div class="detail-card-title">${escapeHtml(card.title || "输入任务")}</div>
+          <div class="task-list scroll-pane">
+            ${items
+              .map(
+                (item) => `
+                  <div class="task-row">
+                    <div class="task-tag">${escapeHtml(item.task_id || "TASK")}</div>
+                    <div class="task-body">
+                      <div class="task-main">N${escapeHtml(item.pickup_node ?? "-")} → N${escapeHtml(item.delivery_node ?? "-")}</div>
+                      <div class="task-meta">优先级 ${escapeHtml(item.priority ?? "-")}</div>
+                    </div>
+                  </div>
+                `
+              )
+              .join("")}
+          </div>
+        </div>
+      `);
+      continue;
+    }
+    if (type === "assignment_result" || type === "path_result") {
+      const items = Array.isArray(card.items) ? card.items : [];
+      blocks.push(`
+        <div class="detail-card">
+          <div class="detail-card-title">${escapeHtml(card.title || "AGV 结果")}</div>
+          <div class="assignment-list scroll-pane">
+            ${items
+              .map((item) => {
+                const agvId = String(item.agv_id || "").trim();
+                const active = agvId && agvId === replay.followAgvId;
+                const mainText = type === "assignment_result" ? escapeHtml(item.task_chain_text || "-") : escapeHtml(item.route_text || "-");
+                const subText =
+                  type === "assignment_result"
+                    ? `${item.has_first_path ? "点击可高亮" : "当前无首个Path"} · 等效时间 ${escapeHtml(item.eta_text || "-")}`
+                    : `点击可高亮 · Path 点数 ${escapeHtml(item.point_count ?? "-")}`;
+                const statusText =
+                  type === "assignment_result"
+                    ? (item.assigned === false ? "未接单" : "已接单")
+                    : "Path";
+                return `
+                  <button class="assignment-button ${active ? "active" : ""}" data-agv-id="${escapeHtml(agvId)}">
+                    <div class="assignment-top">
+                      <div class="agv-tag">${escapeHtml(agvId)}</div>
+                      <div class="status-tag ${item.assigned === false ? "" : "active"}">${escapeHtml(statusText)}</div>
+                      <div class="assignment-eta">${type === "assignment_result" ? (item.assigned === false ? "-" : `ETA ${escapeHtml(item.eta_text || "-")}`) : `Path ${escapeHtml(item.point_count ?? "-")} 点`}</div>
+                    </div>
+                    <div class="assignment-chain">${mainText}</div>
+                    <div class="detail-meta-text">${subText}</div>
+                  </button>
+                `;
+              })
+              .join("")}
+          </div>
+          <div class="focus-hint">点击 AGV 后，会在主画面中高亮该车第一次计算出的全局 Path。</div>
+        </div>
+      `);
+      continue;
+    }
+    if (type === "bridge_summary") {
+      const bridgeNodes = Array.isArray(card.bridge_nodes) ? card.bridge_nodes : [];
+      blocks.push(`
+        <div class="detail-card">
+          <div class="detail-card-title">${escapeHtml(card.title || "桥区路径")}</div>
+          <div class="detail-meta-text">AGV：${escapeHtml(card.agv_id || "-")}</div>
+          <div class="detail-meta-text">路径：${escapeHtml(card.route_text || "-")}</div>
+          <div class="detail-meta-text">桥区节点：${bridgeNodes.map((nid) => `N${escapeHtml(nid)}`).join(" / ") || "-"}</div>
+        </div>
+      `);
+      continue;
+    }
+    if (type === "conflict_summary") {
+      blocks.push(`
+        <div class="detail-card">
+          <div class="detail-card-title">${escapeHtml(card.title || "对向冲突")}</div>
+          <div class="detail-meta-text">涉及车辆：${escapeHtml(card.owner_agv || "-")} / ${escapeHtml(card.contender_agv || "-")}</div>
+          <div class="detail-meta-text">关键节点：${card.node_id !== null && card.node_id !== undefined ? `N${escapeHtml(card.node_id)}` : "-"}</div>
+          ${card.bridge_related ? '<div class="bridge-badge">桥区相关</div>' : ""}
+          <div class="detail-meta-text">${escapeHtml(card.summary || "")}</div>
+        </div>
+      `);
+    }
+  }
+  root.innerHTML = blocks.join("");
+  bindScrollablePanes(root);
 }
 
 function updateBanner(event) {
   const title = document.getElementById("banner-title");
   const desc = document.getElementById("banner-desc");
+  const eyebrow = document.getElementById("banner-eyebrow");
   const focusTitle = document.getElementById("focus-title");
   const focusSubtitle = document.getElementById("focus-subtitle");
   const meta = document.getElementById("focus-meta");
+  const scene = currentScene();
   const focus = focusDescriptor(currentFrame(), event);
   updateStageBadges(event);
 
-  if (!event) {
+  if (!scene) {
     if (replay.followAgvId) {
-      title.textContent = `跟随 AGV ${replay.followAgvId}`;
-      desc.textContent = "当前没有激活章节，主视角保持自动巡航，重点镜头持续跟随你选中的车辆。";
-      focusTitle.textContent = `AGV ${replay.followAgvId} 局部镜头`;
-      focusSubtitle.textContent = "你可以滚轮缩放主画面、拖拽平移，或者回到自动镜头。";
+      eyebrow.textContent = "AGV Focus";
+      title.textContent = `跟随 ${replay.followAgvId}`;
+      desc.textContent = "当前没有激活高层场景，主画面保持巡航，并持续高亮你选中的 AGV 首次全局 Path。";
+      focusTitle.textContent = `AGV ${replay.followAgvId}`;
+      focusSubtitle.textContent = "点击右侧 AGV 卡片后，这里会保持聚焦显示。";
     } else {
-      title.textContent = "自动巡航段";
-      desc.textContent = "导演脚本正在快放常规执行过程，重点事件会提前减速、切镜并做局部高亮。";
-      focusTitle.textContent = "重点镜头";
-      focusSubtitle.textContent = "当前没有激活的重点事件，右侧镜头保持跟随主要执行区域。";
+      eyebrow.textContent = "Replay";
+      title.textContent = "等待场景";
+      desc.textContent = "正在根据回放时间定位高层场景。";
+      focusTitle.textContent = "场景说明";
+      focusSubtitle.textContent = "当前没有激活的场景。";
     }
     const idleItems = [];
-    if (replay.followAgvId) idleItems.push(`<span class="pill">跟随 AGV ${replay.followAgvId}</span>`);
-    idleItems.push(`<span class="pill">主镜头 ${replay.autoMainCamera ? "自动" : "手动"}</span>`);
-    idleItems.push(`<span class="pill">局部镜头 ${replay.autoFocus ? "自动" : "全图"}</span>`);
+    if (replay.followAgvId) idleItems.push(`<span class="pill">已选 AGV ${escapeHtml(replay.followAgvId)}</span>`);
+    idleItems.push(`<span class="pill">${replay.autoMainCamera ? "自动镜头" : "手动镜头"}</span>`);
+    idleItems.push(`<span class="pill">${replay.showBridges ? "桥区显示中" : "桥区隐藏"}</span>`);
     meta.innerHTML = idleItems.join("");
+    const detailKey = `none:${replay.followAgvId}`;
+    if (replay.ui.lastDetailKey !== detailKey) {
+      renderDetailCards(null);
+      replay.ui.lastDetailKey = detailKey;
+    }
     return;
   }
 
-  title.textContent = event.title || "重点事件";
-  desc.textContent = event.subtitle || "";
-  focusTitle.textContent = event.title || "重点镜头";
-  focusSubtitle.textContent = event.subtitle || "";
+  eyebrow.textContent = scene.scene_label || "Scene";
+  title.textContent = scene.title || "场景";
+  desc.textContent = scene.subtitle || "";
+  focusTitle.textContent = scene.title || "场景说明";
+  focusSubtitle.textContent = scene.subtitle || "";
   const items = [];
+  items.push(`<span class="pill">${escapeHtml(scene.scene_label || "")}</span>`);
   for (const agvId of focus.agvIds) {
-    items.push(`<span class="pill">AGV ${agvId}</span>`);
+    items.push(`<span class="pill">AGV ${escapeHtml(agvId)}</span>`);
   }
   for (const nid of focus.nodeIds) {
-    items.push(`<span class="pill">节点 N${nid}</span>`);
+    items.push(`<span class="pill">节点 N${escapeHtml(nid)}</span>`);
   }
-  items.push(`<span class="pill">镜头 ${focus.zoom.toFixed(2)}x</span>`);
-  items.push(`<span class="pill">慢放 ${Number(event.playback_rate || 1).toFixed(2)}x</span>`);
+  if (replay.followAgvId) {
+    items.push(`<span class="pill">高亮 Path: ${escapeHtml(replay.followAgvId)}</span>`);
+  }
+  items.push(`<span class="pill">场景时段 ${formatTime(scene.start_s)} - ${formatTime(scene.end_s)}</span>`);
   meta.innerHTML = items.join("");
+  const detailKey = `${scene.scene_id}:${replay.followAgvId}`;
+  if (replay.ui.lastDetailKey !== detailKey) {
+    renderDetailCards(scene);
+    replay.ui.lastDetailKey = detailKey;
+  }
 }
 
 function updateStats() {
-  const stats = document.getElementById("stats");
-  if (!replay.summary) return;
-  const frame = currentFrame();
-  const event = currentEvent();
-  const html = [
-    ["仿真时长", formatTime(replay.summary.total_sim_time_s)],
-    ["帧数", String(replay.summary.total_frames)],
-    ["导演事件", String(replay.summary.director_event_count)],
-    ["当前 AGV", String((frame.agvs || []).length)],
-    ["章节状态", event ? "聚焦中" : "巡航中"],
-    ["镜头模式", replay.autoMainCamera ? "自动" : "手动"],
-  ]
-    .map(
-      ([label, value]) => `
-        <div class="stat">
-          <span class="label">${label}</span>
-          <span class="value">${value}</span>
-        </div>
-      `
-    )
-    .join("");
-  stats.innerHTML = html;
+  return;
 }
 
 function updateBadges() {
@@ -772,51 +1075,103 @@ function updateBadges() {
   const items = [
     `AGV ${replay.summary.agv_count || 0}`,
     `总时长 ${formatTime(replay.summary.total_sim_time_s)}`,
-    `章节 ${replay.summary.director_event_count || 0}`,
+    `Scenes ${replay.summary.scene_count || replay.scenes.length || 0}`,
   ];
   top.innerHTML = items.map((item) => `<span class="pill">${item}</span>`).join("");
 }
 
 function renderEventList(force = false) {
   const root = document.getElementById("event-list");
-  if (force || !replay.ui.eventListBuilt) {
-    root.innerHTML = replay.timeline
+  if (force || !replay.ui.sceneListBuilt) {
+    root.innerHTML = replay.scenes
       .map(
-        (event) => `
-          <div class="event-item" data-event-id="${event.event_id}">
-            <div class="event-time">${formatTime(event.start_s)} - ${formatTime(event.end_s)}</div>
-            <div class="event-title">${event.title}</div>
-            <div class="event-subtitle">${event.subtitle || ""}</div>
+        (scene) => `
+          <div class="scene-item" data-scene-id="${scene.scene_id}">
+            <div class="scene-top">
+              <div class="scene-index">${scene.order}</div>
+              <div class="eyebrow">${escapeHtml(scene.scene_label || `Scene ${scene.order}`)}</div>
+            </div>
+            <div class="scene-time">${formatTime(scene.start_s)} - ${formatTime(scene.end_s)}</div>
+            <div class="scene-title">${escapeHtml(scene.title || "")}</div>
+            <div class="scene-subtitle">${escapeHtml(scene.subtitle || "")}</div>
           </div>
         `
       )
       .join("");
-    replay.ui.eventListBuilt = true;
+    replay.ui.sceneListBuilt = true;
   }
 
-  const activeId = currentEvent()?.event_id || "";
-  if (!force && activeId === replay.ui.activeEventId) return;
-  replay.ui.activeEventId = activeId;
-  for (const el of root.querySelectorAll(".event-item")) {
-    const isActive = el.getAttribute("data-event-id") === activeId;
+  const activeId = currentScene()?.scene_id || "";
+  if (!force && activeId === replay.ui.activeSceneId) return;
+  replay.ui.activeSceneId = activeId;
+  for (const el of root.querySelectorAll(".scene-item")) {
+    const isActive = el.getAttribute("data-scene-id") === activeId;
     el.classList.toggle("active", isActive);
-    if (isActive && replay.ui.lastScrolledEventId !== activeId) {
+    if (isActive && replay.ui.lastScrolledSceneId !== activeId) {
       el.scrollIntoView({ block: "nearest" });
-      replay.ui.lastScrolledEventId = activeId;
+      replay.ui.lastScrolledSceneId = activeId;
     }
   }
 }
 
 function refreshButtons() {
-  document.getElementById("btn-play").textContent = replay.playing ? "暂停" : "继续播放";
+  document.getElementById("btn-play").textContent = replay.playing ? "暂停" : "播放";
   const stepButton = document.getElementById("btn-step");
   if (stepButton) {
     stepButton.textContent = "禁止跳播";
   }
 }
 
+function bindDragScroll(pane) {
+  if (!pane || pane.dataset.scrollBound === "1") return;
+  pane.dataset.scrollBound = "1";
+  let dragging = false;
+  let pointerId = null;
+  let startY = 0;
+  let startScrollTop = 0;
+  let moved = false;
+  pane.addEventListener("pointerdown", (event) => {
+    if (event.target.closest("[data-scene-id]") || event.target.closest("[data-agv-id]")) {
+      return;
+    }
+    dragging = true;
+    moved = false;
+    pointerId = event.pointerId;
+    startY = event.clientY;
+    startScrollTop = pane.scrollTop;
+    pane.classList.add("dragging");
+    pane.setPointerCapture(event.pointerId);
+  });
+  pane.addEventListener("pointermove", (event) => {
+    if (!dragging || pointerId !== event.pointerId) return;
+    const deltaY = event.clientY - startY;
+    if (Math.abs(deltaY) > 4) moved = true;
+    pane.scrollTop = startScrollTop - deltaY;
+  });
+  const stopDrag = (event) => {
+    if (!dragging) return;
+    if (event?.pointerId !== undefined && pointerId !== event.pointerId) return;
+    dragging = false;
+    pointerId = null;
+    pane.classList.remove("dragging");
+  };
+  pane.addEventListener("pointerup", stopDrag);
+  pane.addEventListener("pointercancel", stopDrag);
+  pane.addEventListener(
+    "click",
+    (event) => {
+      if (moved) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    },
+    true
+  );
+}
+
 function populateFollowSelect() {
   const select = document.getElementById("follow-select");
+  if (!select) return;
   const options = ['<option value="">自动镜头</option>'];
   for (const agvId of allAgvIds()) {
     options.push(`<option value="${agvId}">跟随 AGV ${agvId}</option>`);
@@ -827,7 +1182,10 @@ function populateFollowSelect() {
 
 function setAutoMainCamera(enabled) {
   replay.autoMainCamera = enabled;
-  document.getElementById("toggle-main-camera").checked = enabled;
+  const toggle = document.getElementById("toggle-main-camera");
+  if (toggle) {
+    toggle.checked = enabled;
+  }
 }
 
 function ensureManualMainCamera() {
@@ -884,10 +1242,10 @@ function jumpBy(deltaS) {
 }
 
 function jumpEvent(direction) {
-  if (!replay.timeline.length) return;
+  if (!replay.scenes.length) return;
   const currentTime = replay.currentTimeS;
   if (direction > 0) {
-    const next = replay.timeline.find((item) => Number(item.start_s || 0) > currentTime + 0.001);
+    const next = replay.scenes.find((item) => Number(item.start_s || 0) > currentTime + 0.001);
     if (next) {
       seekToTime(Number(next.start_s || 0), { pause: true, snapCamera: true, forceEventList: true });
       return;
@@ -896,8 +1254,8 @@ function jumpEvent(direction) {
     return;
   }
 
-  let prev = replay.timeline[0];
-  for (const item of replay.timeline) {
+  let prev = replay.scenes[0];
+  for (const item of replay.scenes) {
     if (Number(item.start_s || 0) >= currentTime - 0.001) break;
     prev = item;
   }
@@ -1012,50 +1370,47 @@ function bindUi() {
   document.getElementById("btn-reset").addEventListener("click", () => {
     seekToTime(0, { pause: true, snapCamera: true, forceEventList: true });
   });
-  document.getElementById("btn-zoom-in").addEventListener("click", () => {
-    zoomMainView(1.18);
-  });
-  document.getElementById("btn-zoom-out").addEventListener("click", () => {
-    zoomMainView(0.84);
-  });
   document.getElementById("btn-view-reset").addEventListener("click", () => {
     resetMainView();
   });
+  document.getElementById("btn-prev-event").addEventListener("click", () => jumpEvent(-1));
+  document.getElementById("btn-next-event").addEventListener("click", () => jumpEvent(1));
   document.getElementById("speed-select").addEventListener("change", (event) => {
     replay.globalSpeed = Number(event.target.value || 1);
     render();
   });
-  document.getElementById("display-select").addEventListener("change", (event) => {
-    replay.displayMode = String(event.target.value || "both");
+  document.getElementById("timeline").addEventListener("input", (event) => {
+    const ratio = Number(event.target.value || 0);
+    replay.currentTimeS = clamp(ratio * replay.totalTimeS, 0, replay.totalTimeS);
+    replay.lastTickTs = 0;
+    render({ snapCamera: true, forceEventList: true });
+  });
+  document.getElementById("toggle-bridges").addEventListener("change", (event) => {
+    replay.showBridges = event.target.checked;
     render();
   });
-  document.getElementById("follow-select").addEventListener("change", (event) => {
-    replay.followAgvId = String(event.target.value || "");
-    render({ snapCamera: true });
+  document.getElementById("event-list").addEventListener("click", (event) => {
+    if (!(event.target instanceof Element)) return;
+    const item = event.target.closest("[data-scene-id]");
+    if (!item) return;
+    const sceneId = String(item.getAttribute("data-scene-id") || "");
+    const scene = replay.scenes.find((entry) => String(entry.scene_id) === sceneId);
+    if (!scene) return;
+    seekToTime(Number(scene.start_s || 0), { pause: true, snapCamera: true, forceEventList: true });
   });
-  document.getElementById("toggle-director").addEventListener("change", (event) => {
-    replay.autoDirector = event.target.checked;
-    render();
-  });
-  document.getElementById("toggle-main-camera").addEventListener("change", (event) => {
-    setAutoMainCamera(event.target.checked);
-    render({ snapCamera: true });
-  });
-  document.getElementById("toggle-focus").addEventListener("change", (event) => {
-    replay.autoFocus = event.target.checked;
-    render({ snapCamera: true });
-  });
-  document.getElementById("toggle-reserved").addEventListener("change", (event) => {
-    replay.showReserved = event.target.checked;
-    render();
-  });
-  document.getElementById("toggle-highlight").addEventListener("change", (event) => {
-    replay.highlightFocus = event.target.checked;
-    render();
+  document.getElementById("detail-content").addEventListener("click", (event) => {
+    if (!(event.target instanceof Element)) return;
+    const button = event.target.closest("[data-agv-id]");
+    if (!button) return;
+    const agvId = String(button.getAttribute("data-agv-id") || "");
+    if (!agvId) return;
+    replay.followAgvId = replay.followAgvId === agvId ? "" : agvId;
+    render({ snapCamera: true, forceEventList: true });
   });
 
   bindCanvasInteractions();
   bindKeyboard();
+  bindDragScroll(document.getElementById("detail-content"));
 }
 
 function initializeCameras() {
@@ -1087,15 +1442,32 @@ async function loadBundle() {
   replay.frames = data.frames || [];
   replay.frameTimes = replay.frames.map((frame) => Number(frame.sim_time_s || 0));
   replay.timeline = data.timeline || [];
+  replay.scenes = data.scenes || [];
+  replay.firstPaths = data.first_paths || {};
   replay.summary = data.summary || {};
   replay.totalTimeS = replay.frames.length ? Number(replay.frames[replay.frames.length - 1].sim_time_s || 0) : 0;
   replay.directorBaseRate = Number(data.metadata?.director_base_rate || 2.8);
-  replay.ui.eventListBuilt = false;
-  replay.ui.activeEventId = "";
-  replay.ui.lastScrolledEventId = "";
+  replay.ui.sceneListBuilt = false;
+  replay.ui.activeSceneId = "";
+  replay.ui.lastScrolledSceneId = "";
+  replay.ui.lastDetailKey = "";
+  replay.followAgvId = "";
   document.title = `AGV 导演版回放 - ${data.metadata?.session_name || "session"}`;
   initializeCameras();
   populateFollowSelect();
+  const bridgeToggle = document.getElementById("toggle-bridges");
+  if (bridgeToggle) {
+    const hasBridges = Array.isArray(replay.map?.bridgeNodeIds) && replay.map.bridgeNodeIds.length > 0;
+    bridgeToggle.disabled = !hasBridges;
+    if (!hasBridges) {
+      replay.showBridges = false;
+      bridgeToggle.checked = false;
+    } else {
+      replay.showBridges = true;
+      bridgeToggle.checked = true;
+    }
+  }
+  bindDragScroll(document.getElementById("event-list"));
 }
 
 async function main() {
