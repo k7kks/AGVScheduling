@@ -51,7 +51,7 @@ const replay = {
   currentTimeS: 0,
   playing: true,
   globalSpeed: 1.0,
-  autoDirector: false,
+  autoDirector: true,
   autoFocus: true,
   autoMainCamera: false,
   highlightFocus: true,
