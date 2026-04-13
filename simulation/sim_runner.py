@@ -385,13 +385,12 @@ def generate_task_payload(
     tasks: List[Dict[str, Any]] = []
     for idx in range(1, count + 1):
         task_id = f"TASK_{idx:03d}"
-        bind_device: Optional[str] = None
-        if bind_to_device_ids:
-            bind_device = bind_to_device_ids[(idx - 1) % len(bind_to_device_ids)]
 
         start_node: Optional[int] = None
-        if bind_device and start_node_by_device_id and bind_device in start_node_by_device_id:
-            start_node = start_node_by_device_id[bind_device]
+        if start_node_by_device_id and bind_to_device_ids:
+            bind_device = bind_to_device_ids[(idx - 1) % len(bind_to_device_ids)]
+            if bind_device in start_node_by_device_id:
+                start_node = start_node_by_device_id[bind_device]
         if start_node is None:
             start_node = rng.choice(node_ids)
         targets = pick_targets_from_start(int(start_node))
@@ -435,7 +434,7 @@ def generate_task_payload(
                 "priority": pick_priority(),
                 "minBatteryLevel": 0,
                 "subTasks": sub_tasks,
-                "agvRequirements": [bind_device] if bind_device else [],
+                "agvRequirements": [],
             }
         )
     payload = {
@@ -468,7 +467,7 @@ def generate_loop_tasks_payload(
     cycle: int,
     start_node_by_device_id: Optional[Dict[str, int]] = None,
     forbidden_end_nodes: Optional[Set[int]] = None,
-    bind_tasks: bool = True,
+    bind_tasks: bool = False,
     allocation_algo: Optional[str] = None,
 ) -> Dict[str, Any]:
     def pick_end_node(start_node: int, forbidden: Set[int]) -> int:
@@ -2847,7 +2846,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--bind-tasks",
         action="store_true",
-        help="When generating tasks, bind tasks round-robin to generated device IDs via agvRequirements",
+        help="(Deprecated, no-op) Retained for CLI compatibility.",
     )
     parser.add_argument(
         "--demo-avoidance",
@@ -3007,15 +3006,6 @@ def main() -> int:
             )
             bind_ids: Optional[List[str]] = None
             start_nodes: Optional[Dict[str, int]] = None
-            if args.bind_tasks:
-                bind_ids = [s.get("deviceId", "") for s in status_list if s.get("deviceId")]
-                bind_ids = [x for x in bind_ids if x]
-                start_nodes = {}
-                for s in status_list:
-                    did = s.get("deviceId")
-                    node_id = parse_node_id(s.get("nodeId"))
-                    if did and node_id is not None:
-                        start_nodes[did] = node_id
 
             tasks_payload = generate_task_payload(
                 graph,

@@ -175,8 +175,7 @@ SIM_ASSIGNED_TRAIL_INTERVAL="${SIM_ASSIGNED_TRAIL_INTERVAL:-0.5}"
 SIM_TRAIL_END_STOP="${SIM_TRAIL_END_STOP:-0}"
 export SIM_TRAIL_END_STOP
 SIM_NO_VIS="${SIM_NO_VIS:-0}"
-SIM_BIND_TASKS="${SIM_BIND_TASKS:-1}"
-SIM_BIND_TASKS_RATIO="${SIM_BIND_TASKS_RATIO:-0.3}"
+# Round-robin task binding removed — allocation algorithm handles assignment.
 
 SIM_LOOP_TASKS="${SIM_LOOP_TASKS:-1}"
 SIM_LOOP_MODE="${SIM_LOOP_MODE:-timer}"
@@ -245,9 +244,6 @@ if is_true "${SIM_NO_VIS}"; then
 fi
 
 TASK_BIND_FLAG=""
-if is_true "${SIM_BIND_TASKS}" && is_true "${SIM_GENERATE}"; then
-  TASK_BIND_FLAG="--bind-tasks --bind-tasks-ratio ${SIM_BIND_TASKS_RATIO}"
-fi
 
 LOOP_FLAG=""
 if is_true "${SIM_LOOP_TASKS}"; then
@@ -287,7 +283,7 @@ run_sim() {
       --seed "${SIM_SEED}"
     )
     if [[ -n "${TASK_BIND_FLAG}" ]]; then
-      sim_args+=(--bind-tasks --bind-tasks-ratio "${SIM_BIND_TASKS_RATIO}")
+      :  # reserved for future upstream task binding
     fi
   else
     if [[ -n "${SIM_STATUS_FILE}" ]]; then

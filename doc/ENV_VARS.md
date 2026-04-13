@@ -169,8 +169,6 @@
 | `SIM_BUILD` | `0` | 1=运行前编译 `external_receiver` 到 `build_local/`。 |
 | `BUILD_JOBS` | `9` | `cmake --build -j` 并行度（仅 `SIM_BUILD=1` 时使用）。 |
 | `PYTHON_BIN` | `python3` | Python 解释器。 |
-| `SIM_BIND_TASKS` | `1` | 1=生成任务时 round-robin 绑定到设备（`agvRequirements`）。 |
-| `SIM_BIND_TASKS_RATIO` | `1.0` | `SIM_BIND_TASKS=1` 时，保留绑定的任务比例（0..1）。 |
 | `SIM_RESTART_ON_EXIT` | `0` | 1=仿真退出后自动重启。 |
 
 ### 3.7 区域划分（可视化/拥堵）

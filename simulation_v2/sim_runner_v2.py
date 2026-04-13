@@ -707,30 +707,6 @@ class TaskPool:
         return payload
 
 
-def apply_bind_tasks_ratio(payload: Dict[str, Any], rng: random.Random, ratio: float) -> int:
-    ratio = max(0.0, min(1.0, float(ratio)))
-    if ratio >= 1.0:
-        return 0
-    tasks = payload.get("candidateTasks", [])
-    if not isinstance(tasks, list):
-        return 0
-    cleared = 0
-    for task in tasks:
-        if not isinstance(task, dict):
-            continue
-        bind_robot_id = str(task.get("bindRobotId", "")).strip()
-        agv_reqs = task.get("agvRequirements")
-        has_req = isinstance(agv_reqs, list) and bool(agv_reqs)
-        if not bind_robot_id and not has_req:
-            continue
-        if rng.random() >= ratio:
-            task["agvRequirements"] = []
-            if "bindRobotId" in task:
-                task["bindRobotId"] = ""
-            cleared += 1
-    return cleared
-
-
 def load_map_raw(map_path: Path) -> Dict[str, Any]:
     data = json.loads(map_path.read_text(encoding="utf-8"))
     if isinstance(data, dict) and "mapData" in data and isinstance(data["mapData"], dict):
@@ -2181,13 +2157,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--task-count", type=int, default=50, help="Number of tasks to generate")
     p.add_argument("--seed", type=int, default=7, help="Random seed for generation")
     p.add_argument("--device-prefix", default="AGV", help="Device ID prefix for generated AGVs")
-    p.add_argument("--bind-tasks", action="store_true", help="Bind tasks round-robin to device IDs via agvRequirements")
-    p.add_argument(
-        "--bind-tasks-ratio",
-        type=float,
-        default=float(env("SIM_BIND_TASKS_RATIO", "1.0")),
-        help="If --bind-tasks is on, keep binding for this fraction of tasks (0..1).",
-    )
     p.add_argument("--include-status-in-tasks", action="store_true", help="Embed agvStatusList into tasks payload")
     p.add_argument(
         "--alloc-algo",
@@ -2343,7 +2312,6 @@ def main() -> int:
     task_pool = TaskPool()
     if args.generate:
         rng = random.Random(int(args.seed))
-        bind_ratio = max(0.0, min(1.0, float(args.bind_tasks_ratio)))
         start_candidates: Optional[List[int]] = None
         if node_list:
             start_candidates = [
@@ -2361,30 +2329,15 @@ def main() -> int:
             str(args.device_prefix),
             start_candidates,
         )
-        bind_ids: Optional[List[str]] = None
-        start_nodes: Optional[Dict[str, int]] = None
-        if args.bind_tasks:
-            bind_ids = [s.get("deviceId", "") for s in status_list if s.get("deviceId")]
-            bind_ids = [x for x in bind_ids if x]
-            start_nodes = {}
-            for s in status_list:
-                did = s.get("deviceId")
-                nid = sim.parse_node_id(s.get("nodeId"))
-                if did and nid is not None:
-                    start_nodes[did] = nid
         tasks_payload = sim.generate_task_payload(
             graph,
             int(args.task_count),
             rng,
             str(args.map_version),
-            bind_to_device_ids=bind_ids,
-            start_node_by_device_id=start_nodes,
             allocation_algo=args.alloc_algo or None,
         )
         if args.include_status_in_tasks and tasks_payload is not None:
             tasks_payload["agvStatusList"] = status_list
-        if tasks_payload and args.bind_tasks and bind_ratio < 1.0:
-            apply_bind_tasks_ratio(tasks_payload, rng, bind_ratio)
     else:
         if args.status_path:
             status_path = Path(args.status_path)
@@ -2415,7 +2368,6 @@ def main() -> int:
     web_map = build_web_map_payload(map_raw, effective_agv_count)
     max_speed_mm_s = int(web_map.get("info", {}).get("maxSpeed", 1000) or 1000)
     v_max = float(args.max_speed_m_s) if float(args.max_speed_m_s) > 0 else max(0.1, max_speed_mm_s / 1000.0)
-    bind_ratio = max(0.0, min(1.0, float(args.bind_tasks_ratio)))
     if tasks_payload:
         occupied_by_node: Dict[int, str] = {}
         forbidden_nodes: Set[int] = set()
@@ -2796,11 +2748,9 @@ def main() -> int:
                                 cycle=loop_cycle,
                                 start_node_by_device_id=start_nodes,
                                 forbidden_end_nodes=current_nodes | map_forbidden_nodes,
-                                bind_tasks=bool(args.bind_tasks),
+                                bind_tasks=False,
                                 allocation_algo=args.alloc_algo or None,
                             )
-                            if args.bind_tasks and bind_ratio < 1.0:
-                                apply_bind_tasks_ratio(payload, loop_rng, bind_ratio)
                             task_pool.add_payload(payload)
                             occupied_by_node: Dict[int, str] = {}
                             for device_id, nid in start_nodes.items():

@@ -70,7 +70,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-bind-history", action="store_true", help="Do not preserve historical AGV bindings in agvRequirements")
     p.add_argument("--no-attach-status", action="store_true", help="Do not embed agvStatusList into the generated tasks payload")
     p.add_argument("--max-subtasks", type=int, default=0, help="Cap subtask points per task; 0 means no limit")
-    p.add_argument("--round-robin-bind", action="store_true", help="Pre-bind tasks to AGVs in round-robin for balanced allocation")
     return p.parse_args()
 
 
@@ -476,12 +475,6 @@ def main() -> int:
                 if str(agv_id).strip() in generated_ids
             ]
 
-    # Round-robin binding: distribute tasks evenly across AGVs
-    if args.round_robin_bind:
-        agv_ids_pool = [str(item.get("deviceId", "")).strip() for item in status_list]
-        if agv_ids_pool:
-            for idx, task in enumerate(selected_tasks):
-                task["agvRequirements"] = [agv_ids_pool[idx % len(agv_ids_pool)]]
 
     clean_tasks_payload: Dict[str, Any] = {
         "schedulingRequestId": f"A4_REAL_REQ_{int(time.time() * 1000)}",
