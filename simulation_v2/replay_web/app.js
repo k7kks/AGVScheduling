@@ -566,13 +566,28 @@ function drawPolyline(ctx, transform, points, style) {
   ctx.strokeStyle = style.color;
   ctx.lineWidth = style.width || 2;
   ctx.globalAlpha = style.alpha ?? 0.8;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
   if (style.dash) ctx.setLineDash(style.dash);
   ctx.beginPath();
   const first = transform.toCanvas(points[0].x, points[0].y);
   ctx.moveTo(first.cx, first.cy);
-  for (let i = 1; i < points.length; i += 1) {
-    const pt = transform.toCanvas(points[i].x, points[i].y);
-    ctx.lineTo(pt.cx, pt.cy);
+  if (style.smooth && points.length >= 3) {
+    // Catmull-Rom-like smooth curve through node positions
+    for (let i = 1; i < points.length; i += 1) {
+      const prev = transform.toCanvas(points[Math.max(0, i - 1)].x, points[Math.max(0, i - 1)].y);
+      const cur = transform.toCanvas(points[i].x, points[i].y);
+      const cpx = (prev.cx + cur.cx) / 2;
+      const cpy = (prev.cy + cur.cy) / 2;
+      ctx.quadraticCurveTo(prev.cx, prev.cy, cpx, cpy);
+    }
+    const last = transform.toCanvas(points[points.length - 1].x, points[points.length - 1].y);
+    ctx.lineTo(last.cx, last.cy);
+  } else {
+    for (let i = 1; i < points.length; i += 1) {
+      const pt = transform.toCanvas(points[i].x, points[i].y);
+      ctx.lineTo(pt.cx, pt.cy);
+    }
   }
   ctx.stroke();
   ctx.restore();
@@ -651,10 +666,18 @@ function drawSelectedFirstPath(ctx, transform) {
   const scene = currentScene();
   const focus = focusDescriptor(currentFrame(), currentEvent());
   
-  // Collect AGV IDs to draw paths for
+  // Only draw paths when user explicitly selected an AGV
+  // or for conflict/bridge scenes (≤2 AGVs where paths are informative)
   const agvIds = new Set();
-  if (replay.followAgvId) agvIds.add(String(replay.followAgvId));
-  for (const id of focus.agvIds) agvIds.add(String(id));
+  if (replay.followAgvId) {
+    agvIds.add(String(replay.followAgvId));
+  } else {
+    const kind = String(scene?.kind || "");
+    const isMultiAgvScene = kind.includes("conflict") || kind === "bridge";
+    if (isMultiAgvScene) {
+      for (const id of focus.agvIds) agvIds.add(String(id));
+    }
+  }
   
   if (agvIds.size === 0) return;
 
@@ -691,6 +714,7 @@ function drawSelectedFirstPath(ctx, transform) {
       color: lineColor,
       width: 6.2,
       alpha: 0.98,
+      smooth: true,
     });
     const first = displayPoints[0];
     const second = displayPoints[Math.min(displayPoints.length - 1, 1)];
@@ -742,7 +766,7 @@ function drawSelectedFirstPath(ctx, transform) {
 
 function drawAgvs(ctx, transform, frame, focus, event) {
   const mode = replay.displayMode;
-  const hasEmphasis = replay.highlightFocus && (Boolean(replay.followAgvId) || focus.agvIds.length > 0);
+  const hasEmphasis = replay.highlightFocus && Boolean(replay.followAgvId);
   const pulse = 0.5 + 0.5 * Math.sin(replay.currentTimeS * 7.2);
   for (let i = 0; i < frame.agvs.length; i += 1) {
     const agv = frame.agvs[i];
