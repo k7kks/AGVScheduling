@@ -51,9 +51,9 @@ const replay = {
   currentTimeS: 0,
   playing: true,
   globalSpeed: 1.0,
-  autoDirector: true,
+  autoDirector: false,
   autoFocus: true,
-  autoMainCamera: true,
+  autoMainCamera: false,
   highlightFocus: true,
   showReserved: false,
   showBridges: true,
@@ -850,6 +850,7 @@ function bindScrollablePanes(root = document) {
     let startScrollTop = 0;
     let moved = false;
     pane.addEventListener("pointerdown", (event) => {
+      if (event.target.closest("[data-agv-id]") || event.target.closest("[data-scene-id]")) return;
       dragging = true;
       moved = false;
       pointerId = event.pointerId;
@@ -1284,7 +1285,14 @@ function render(options = {}) {
   const frame = currentFrame();
   const event = currentEvent();
   const snap = Boolean(options.snapCamera || !replay.playing);
+  const savedAutoMain = replay.autoMainCamera;
+  if (options.snapCamera) {
+    replay.autoMainCamera = true;
+  }
   syncCameras(frame, event, { snapMain: snap, snapFocus: snap });
+  if (options.snapCamera) {
+    replay.autoMainCamera = savedAutoMain;
+  }
   drawScene(mainCtx, mainCanvas, frame, event, "main");
   drawScene(focusCtx, focusCanvas, frame, event, "focus");
   updateBanner(event);
