@@ -690,14 +690,16 @@ def build_bridge_scene(
         return None
     agv_id = str(chosen.get("agv_id", "")).strip()
     bridge_nodes = [nid for nid in chosen.get("node_ids", []) if node_id(nid) in bridge_node_set][:8]
+    start_s = max(0.0, safe_float(chosen.get("start_s"), 0.0) - 0.1)
     return {
-        "scene_id": "scene_03_bridge",
+        "scene_id": "scene_bridge",
         "order": order,
         "scene_label": f"Scene {order}",
         "kind": "bridge",
         "title": "桥场景",
-        "subtitle": "桥区会被单独高亮。这个场景展示车辆进入桥区时的路径组织。",
-        "start_s": max(0.0, safe_float(chosen.get("start_s"), 0.0) - 0.1),
+        "subtitle": f"{agv_id} 路径经过独木桥(N575)区域，展示桥区路径组织。",
+        "start_s": start_s,
+        "end_s": start_s + 25.0,
         "focus": {
             "agv_ids": [agv_id] if agv_id else [],
             "node_ids": unique_ints([node_id(x) for x in bridge_nodes], limit=10),
@@ -1077,6 +1079,118 @@ def build_blocking_scene(
     }
 
 
+def build_headon_conflict_scene(
+    *,
+    order: int,
+    frames: List[Dict[str, Any]],
+    map_edges: List[Dict[str, Any]],
+    min_start_s: float = 20.0,
+    max_start_s: float = 999.0,
+) -> Optional[Dict[str, Any]]:
+    """Find two AGVs approaching each other on the same edge (head-on conflict)."""
+    # Build adjacency with edge info
+    edge_set: set[Tuple[int, int]] = set()
+    for e in map_edges:
+        a = int(e.get("startNode", e.get("startNodeId", 0)))
+        b = int(e.get("endNode", e.get("endNodeId", 0)))
+        edge_set.add((a, b))
+        edge_set.add((b, a))
+
+    # Look for frames where two AGVs are on the same edge moving toward each other
+    headon_events: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for frame_idx, frame in enumerate(frames):
+        sim_time_s = safe_float(frame.get("sim_time_s"), 0.0)
+        if sim_time_s < min_start_s or sim_time_s > max_start_s:
+            continue
+        if frame_idx % 3 != 0:
+            continue
+        agvs = frame.get("agvs", []) or []
+        # Build a map of (current_node, next_node) -> agv_id for moving AGVs
+        moving: List[Tuple[str, int, int, float]] = []
+        for agv in agvs:
+            agv_id = str(agv.get("id", "")).strip()
+            if not agv_id:
+                continue
+            cur_node = node_id(agv.get("nodeId"))
+            next_node = node_id(agv.get("nextNodeId"))
+            speed = safe_float(agv.get("speed"), 0.0)
+            if cur_node is not None and next_node is not None and cur_node != next_node:
+                moving.append((agv_id, cur_node, next_node, speed))
+
+        # Check pairs for head-on (A→B while B→A, or close approach on same corridor)
+        for i in range(len(moving)):
+            for j in range(i + 1, len(moving)):
+                a_id, a_cur, a_next, a_spd = moving[i]
+                b_id, b_cur, b_next, b_spd = moving[j]
+                # Direct head-on: A going to B's node and B going to A's node
+                is_headon = (a_next == b_cur and b_next == a_cur)
+                # Near head-on: A and B on same corridor segment approaching each other
+                if not is_headon:
+                    # A heading toward B's position, B heading toward A's position
+                    is_headon = (a_next == b_cur or b_next == a_cur) and (a_cur, b_cur) in edge_set
+                if not is_headon:
+                    # Check if they share a next node (converging conflict)
+                    is_headon = (a_next == b_next) and (a_cur, a_next) in edge_set and (b_cur, b_next) in edge_set
+                if not is_headon:
+                    continue
+                key = tuple(sorted([a_id, b_id]))  # type: ignore
+                conflict_node = a_next if a_next == b_cur else (b_next if b_next == a_cur else a_next)
+                if key not in headon_events:
+                    headon_events[key] = {
+                        "first_t": sim_time_s,
+                        "last_t": sim_time_s,
+                        "count": 0,
+                        "agv_a": a_id,
+                        "agv_b": b_id,
+                        "node": conflict_node,
+                    }
+                headon_events[key]["last_t"] = sim_time_s
+                headon_events[key]["count"] += 1
+
+    if not headon_events:
+        return None
+
+    # Pick the most sustained head-on encounter
+    best = max(headon_events.values(), key=lambda h: (h["count"], h["last_t"] - h["first_t"]))
+    if best["count"] < 2:
+        return None
+
+    start_s = max(0.0, best["first_t"] - 3.0)
+    end_s = best["last_t"] + 8.0
+    agv_a = best["agv_a"]
+    agv_b = best["agv_b"]
+    conflict_node = best["node"]
+
+    return {
+        "scene_id": "scene_conflict",
+        "order": order,
+        "scene_label": f"Scene {order}",
+        "kind": "headon_conflict",
+        "title": "冲突消解",
+        "subtitle": f"{agv_a} 与 {agv_b} 在 N{conflict_node} 附近对向行驶，系统检测冲突并安排让行。",
+        "start_s": start_s,
+        "end_s": end_s,
+        "playback_rate": 0.8,
+        "focus": {
+            "agv_ids": [agv_a, agv_b],
+            "node_ids": [conflict_node] if conflict_node is not None else [],
+            "zoom": 2.8,
+            "mode": "conflict",
+        },
+        "cards": [
+            {
+                "type": "conflict_summary",
+                "title": "对向冲突",
+                "owner_agv": agv_a,
+                "contender_agv": agv_b,
+                "node_id": conflict_node,
+                "bridge_related": False,
+                "summary": f"{agv_a} 与 {agv_b} 对向行驶，在 N{conflict_node} 处冲突消解。",
+            }
+        ],
+    }
+
+
 def build_idle_assignment_scene(
     *,
     order: int,
@@ -1221,22 +1335,34 @@ def build_scenes(
         scene_2["end_s"] = 18.0
         scene_2["playback_rate"] = 1.0
 
-    # Scene 3: real blocking/contention from frame data (before bridge scene)
-    scene_conflict = build_blocking_scene(order=3, frames=frames, min_start_s=20.0, max_start_s=120.0)
-    if scene_conflict is not None:
-        scene_conflict["playback_rate"] = 1.0
-
-    # Scene 4: bridge wait scene from real data (picks the tightest complete cycle)
-    scene_bridge = build_bridge_wait_scene(order=4, frames=frames, bridge_node_set=bridge_node_set, preferred_nodes={574, 575, 576, 577, 578, 579, 580}, map_edges=map_json.get("edges", []))
+    # Scene 3: bridge scene — prefer wait cycle, fall back to simple bridge traversal
+    scene_bridge = build_bridge_wait_scene(order=3, frames=frames, bridge_node_set=bridge_node_set, preferred_nodes={574, 575, 576, 577, 578, 579, 580}, map_edges=map_json.get("edges", []))
+    if scene_bridge is None:
+        scene_bridge = build_bridge_scene(order=3, first_paths=first_paths, bridge_node_set={574, 575, 576, 577, 578, 579, 580}, after_s=30.0)
     if scene_bridge is not None:
         scene_bridge["playback_rate"] = 1.0
 
-    # Scene 5: idle AGV picks up new tasks
-    idle_start = 160.0
+    # Scene 4: conflict (starts after bridge to avoid overlap)
+    conflict_min_s = 20.0
     if scene_bridge is not None:
-        idle_start = max(idle_start, safe_float(scene_bridge.get("end_s"), 160.0) + 2.0)
-    if scene_conflict is not None and scene_bridge is None:
-        idle_start = max(idle_start, safe_float(scene_conflict.get("end_s"), 160.0) + 2.0)
+        conflict_min_s = max(conflict_min_s, safe_float(scene_bridge.get("end_s"), 20.0) + 1.0)
+    scene_conflict = build_headon_conflict_scene(
+        order=4, frames=frames, map_edges=map_json.get("edges", []),
+        min_start_s=conflict_min_s, max_start_s=250.0,
+    )
+    if scene_conflict is None:
+        scene_conflict = build_blocking_scene(order=4, frames=frames, min_start_s=conflict_min_s, max_start_s=250.0)
+    if scene_conflict is not None:
+        scene_conflict["playback_rate"] = 1.0
+
+    # Scene 5: idle AGV picks up new tasks
+    idle_start = max(160.0, total_sim_s * 0.7)
+    last_scene_end = 0.0
+    if scene_bridge is not None:
+        last_scene_end = max(last_scene_end, safe_float(scene_bridge.get("end_s"), 0.0))
+    if scene_conflict is not None:
+        last_scene_end = max(last_scene_end, safe_float(scene_conflict.get("end_s"), 0.0))
+    idle_start = max(idle_start, last_scene_end + 2.0)
     scene_5 = build_idle_assignment_scene(
         order=5,
         assignment_events=assignment_events,
@@ -1308,6 +1434,38 @@ def build_bundle(session_dir: Path, *, bundle_name: str = "leader_demo_bundle.js
     bridge_node_set = {int(x) for x in map_json.get("bridgeNodeIds", []) or [] if node_id(x) is not None}
     timeline = build_timeline(raw_events, frames, bridge_node_set)
     first_paths = extract_first_paths(frames)
+
+    # Enrich first_paths with all subtask (pickup/delivery) node IDs from assignments
+    assignment_events = [
+        raw for raw in raw_events
+        if str(raw.get("kind", "")).strip() == "assignment"
+        and isinstance(raw.get("assignments"), list)
+    ]
+    for raw in assignment_events:
+        for entry in raw.get("assignments", []):
+            if not isinstance(entry, dict):
+                continue
+            agv_id = str(entry.get("agv_id", "")).strip()
+            if agv_id not in first_paths:
+                continue
+            if "subtask_nodes" in first_paths[agv_id]:
+                continue
+            tasks = entry.get("tasks")
+            if not isinstance(tasks, list):
+                continue
+            st_nodes: list[int] = []
+            path_node_set = set(first_paths[agv_id].get("node_ids", []))
+            for task in tasks:
+                if not isinstance(task, dict):
+                    continue
+                for key in ("pickup_node", "delivery_node"):
+                    nid = node_id(task.get(key))
+                    if nid is not None and nid not in st_nodes:
+                        st_nodes.append(nid)
+            # Keep only those on the actual path, but if none match, keep all
+            on_path = [n for n in st_nodes if n in path_node_set]
+            first_paths[agv_id]["subtask_nodes"] = on_path if on_path else st_nodes
+
     scenes = build_scenes(raw_events, frames, timeline, map_json, first_paths)
     summary = build_summary(session_json, frames, raw_events, timeline, scenes)
     bundle = {

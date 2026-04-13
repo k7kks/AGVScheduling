@@ -615,15 +615,40 @@ function drawFocusNodes(ctx, transform, focus) {
   ctx.restore();
 }
 
+function drawSubtaskMarker(ctx, transform, pt, label) {
+  const x = Number(pt.x), y = Number(pt.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  const sp = transform.toCanvas(x, y);
+  ctx.beginPath();
+  ctx.arc(sp.cx, sp.cy, 12, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(255, 214, 102, 0.22)";
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(sp.cx, sp.cy, 6, 0, Math.PI * 2);
+  ctx.fillStyle = "#ffd166";
+  ctx.fill();
+  ctx.font = "bold 12px Arial";
+  ctx.fillStyle = "#ffd166";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "bottom";
+  ctx.fillText(label, sp.cx + 14, sp.cy - 6);
+}
+
 function drawSelectedFirstPath(ctx, transform) {
   const agvId = String(replay.followAgvId || "").trim();
   if (!agvId) return;
   const pathInfo = replay.firstPaths?.[agvId];
   if (!pathInfo || !Array.isArray(pathInfo.points) || pathInfo.points.length < 2) return;
+
+  const scene = currentScene();
+  const isAssignment = scene && String(scene.kind || "").includes("assignment");
   const subtask = pathInfo.first_subtask;
   const subtaskNodeId = subtask ? parseNodeId(subtask.nodeId) : null;
+  const subtaskNodes = Array.isArray(pathInfo.subtask_nodes) ? pathInfo.subtask_nodes : [];
+
+  // Assignment scene: truncate at first subtask; others: show full path
   let displayPoints = pathInfo.points;
-  if (subtaskNodeId !== null) {
+  if (isAssignment && subtaskNodeId !== null) {
     for (let i = 0; i < pathInfo.points.length; i += 1) {
       if (parseNodeId(pathInfo.points[i].nodeId) === subtaskNodeId) {
         displayPoints = pathInfo.points.slice(0, i + 1);
@@ -649,21 +674,29 @@ function drawSelectedFirstPath(ctx, transform) {
     ctx.fillStyle = "#67e8f9";
     ctx.fill();
   }
-  if (subtask && Number.isFinite(Number(subtask.x)) && Number.isFinite(Number(subtask.y))) {
-    const sp = transform.toCanvas(Number(subtask.x), Number(subtask.y));
-    ctx.beginPath();
-    ctx.arc(sp.cx, sp.cy, 12, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255, 214, 102, 0.22)";
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(sp.cx, sp.cy, 6, 0, Math.PI * 2);
-    ctx.fillStyle = "#ffd166";
-    ctx.fill();
-    ctx.font = "bold 12px Arial";
-    ctx.fillStyle = "#ffd166";
-    ctx.textAlign = "left";
-    ctx.textBaseline = "bottom";
-    ctx.fillText("首个子任务点", sp.cx + 14, sp.cy - 6);
+
+  // Highlight subtask node(s) along the displayed path
+  if (isAssignment) {
+    // Assignment: only first subtask point
+    if (subtask && Number.isFinite(Number(subtask.x)) && Number.isFinite(Number(subtask.y))) {
+      drawSubtaskMarker(ctx, transform, subtask, "首个子任务点");
+    }
+  } else {
+    // Other scenes: highlight all subtask nodes found along the path
+    const subtaskSet = new Set(subtaskNodes.map(n => Number(n)));
+    if (subtaskNodeId !== null) subtaskSet.add(subtaskNodeId);
+    let labelIdx = 0;
+    for (const pt of displayPoints) {
+      const nid = parseNodeId(pt.nodeId);
+      if (nid !== null && subtaskSet.has(nid)) {
+        labelIdx += 1;
+        drawSubtaskMarker(ctx, transform, pt, `子任务点 ${labelIdx}`);
+      }
+    }
+    // Fallback: if no subtask_nodes data, at least show first subtask
+    if (labelIdx === 0 && subtask && Number.isFinite(Number(subtask.x)) && Number.isFinite(Number(subtask.y))) {
+      drawSubtaskMarker(ctx, transform, subtask, "子任务点");
+    }
   }
   if (first && second) {
     const p0 = transform.toCanvas(first.x, first.y);
@@ -693,13 +726,6 @@ function drawAgvs(ctx, transform, frame, focus, event) {
     const dimFactor = hasEmphasis && !isFocus ? 0.28 : 1;
 
     const isFollowed = String(agv.id) === String(replay.followAgvId);
-    if (mode !== "trail" || isFollowed) {
-      drawPolyline(ctx, transform, agv.path || [], {
-        color,
-        width: isFollowed ? 4.8 : isFocus ? 3.4 : 2.1,
-        alpha: isFollowed ? 0.9 : (isFocus ? 0.6 : 0.3) * dimFactor,
-      });
-    }
     if (mode !== "path") {
       drawPolyline(ctx, transform, agv.trail || [], {
         color,
