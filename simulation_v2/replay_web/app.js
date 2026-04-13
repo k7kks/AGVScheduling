@@ -649,18 +649,28 @@ function drawSelectedFirstPath(ctx, transform) {
   if (!agvId) return;
   const pathInfo = replay.firstPaths?.[agvId];
   if (!pathInfo || !Array.isArray(pathInfo.points) || pathInfo.points.length < 2) return;
+  const subtask = pathInfo.first_subtask;
+  const subtaskNodeId = subtask ? parseNodeId(subtask.nodeId) : null;
+  let displayPoints = pathInfo.points;
+  if (subtaskNodeId !== null) {
+    for (let i = 0; i < pathInfo.points.length; i += 1) {
+      if (parseNodeId(pathInfo.points[i].nodeId) === subtaskNodeId) {
+        displayPoints = pathInfo.points.slice(0, i + 1);
+        break;
+      }
+    }
+  }
+  if (displayPoints.length < 2) return;
   ctx.save();
   ctx.shadowColor = "rgba(8, 145, 178, 0.45)";
   ctx.shadowBlur = 18;
-  drawPolyline(ctx, transform, pathInfo.points, {
+  drawPolyline(ctx, transform, displayPoints, {
     color: "#0891b2",
     width: 6.2,
     alpha: 0.98,
   });
-  const first = pathInfo.points[0];
-  const second = pathInfo.points[Math.min(pathInfo.points.length - 1, 1)];
-  const end = pathInfo.points[pathInfo.points.length - 1];
-  const subtask = pathInfo.first_subtask;
+  const first = displayPoints[0];
+  const second = displayPoints[Math.min(displayPoints.length - 1, 1)];
   if (first) {
     const p = transform.toCanvas(first.x, first.y);
     ctx.beginPath();
@@ -668,51 +678,21 @@ function drawSelectedFirstPath(ctx, transform) {
     ctx.fillStyle = "#67e8f9";
     ctx.fill();
   }
-  if (end) {
-    const p = transform.toCanvas(end.x, end.y);
-    ctx.beginPath();
-    ctx.arc(p.cx, p.cy, 8, 0, Math.PI * 2);
-    ctx.strokeStyle = "#67e8f9";
-    ctx.lineWidth = 2.4;
-    ctx.stroke();
-    ctx.font = "bold 12px Arial";
-    ctx.fillStyle = "#67e8f9";
-    ctx.textAlign = "left";
-    ctx.textBaseline = "bottom";
-    ctx.fillText("首次 Path", p.cx + 10, p.cy - 6);
-  }
   if (subtask && Number.isFinite(Number(subtask.x)) && Number.isFinite(Number(subtask.y))) {
     const sp = transform.toCanvas(Number(subtask.x), Number(subtask.y));
-    if (end) {
-      const ep = transform.toCanvas(end.x, end.y);
-      const dx = sp.cx - ep.cx;
-      const dy = sp.cy - ep.cy;
-      if (dx * dx + dy * dy > 25) {
-        ctx.beginPath();
-        ctx.setLineDash([6, 4]);
-        ctx.strokeStyle = "#ffd166";
-        ctx.lineWidth = 2.4;
-        ctx.globalAlpha = 0.7;
-        ctx.moveTo(ep.cx, ep.cy);
-        ctx.lineTo(sp.cx, sp.cy);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.globalAlpha = 1;
-      }
-    }
     ctx.beginPath();
-    ctx.arc(sp.cx, sp.cy, 10, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255, 214, 102, 0.18)";
+    ctx.arc(sp.cx, sp.cy, 12, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255, 214, 102, 0.22)";
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(sp.cx, sp.cy, 5.5, 0, Math.PI * 2);
+    ctx.arc(sp.cx, sp.cy, 6, 0, Math.PI * 2);
     ctx.fillStyle = "#ffd166";
     ctx.fill();
     ctx.font = "bold 12px Arial";
     ctx.fillStyle = "#ffd166";
     ctx.textAlign = "left";
     ctx.textBaseline = "bottom";
-    ctx.fillText("首个子任务点", sp.cx + 12, sp.cy - 4);
+    ctx.fillText("首个子任务点", sp.cx + 14, sp.cy - 6);
   }
   if (first && second) {
     const p0 = transform.toCanvas(first.x, first.y);
@@ -1253,6 +1233,7 @@ function seekToTime(timeS, options = {}) {
   render({
     forceEventList: Boolean(options.forceEventList),
     snapCamera: Boolean(options.snapCamera),
+    autoSnap: Boolean(options.autoSnap),
   });
 }
 
@@ -1266,10 +1247,10 @@ function jumpEvent(direction) {
   if (direction > 0) {
     const next = replay.scenes.find((item) => Number(item.start_s || 0) > currentTime + 0.001);
     if (next) {
-      seekToTime(Number(next.start_s || 0), { pause: true, snapCamera: true, forceEventList: true });
+      seekToTime(Number(next.start_s || 0), { pause: true, snapCamera: true, autoSnap: true, forceEventList: true });
       return;
     }
-    seekToTime(replay.totalTimeS, { pause: true, snapCamera: true, forceEventList: true });
+    seekToTime(replay.totalTimeS, { pause: true, snapCamera: true, autoSnap: true, forceEventList: true });
     return;
   }
 
@@ -1278,7 +1259,7 @@ function jumpEvent(direction) {
     if (Number(item.start_s || 0) >= currentTime - 0.001) break;
     prev = item;
   }
-  seekToTime(Number(prev.start_s || 0), { pause: true, snapCamera: true, forceEventList: true });
+  seekToTime(Number(prev.start_s || 0), { pause: true, snapCamera: true, autoSnap: true, forceEventList: true });
 }
 
 function render(options = {}) {
@@ -1286,11 +1267,11 @@ function render(options = {}) {
   const event = currentEvent();
   const snap = Boolean(options.snapCamera || !replay.playing);
   const savedAutoMain = replay.autoMainCamera;
-  if (options.snapCamera) {
+  if (options.autoSnap) {
     replay.autoMainCamera = true;
   }
   syncCameras(frame, event, { snapMain: snap, snapFocus: snap });
-  if (options.snapCamera) {
+  if (options.autoSnap) {
     replay.autoMainCamera = savedAutoMain;
   }
   drawScene(mainCtx, mainCanvas, frame, event, "main");
@@ -1422,7 +1403,7 @@ function bindUi() {
     const sceneId = String(item.getAttribute("data-scene-id") || "");
     const scene = replay.scenes.find((entry) => String(entry.scene_id) === sceneId);
     if (!scene) return;
-    seekToTime(Number(scene.start_s || 0), { pause: true, snapCamera: true, forceEventList: true });
+    seekToTime(Number(scene.start_s || 0), { pause: true, snapCamera: true, autoSnap: true, forceEventList: true });
   });
   document.getElementById("detail-content").addEventListener("click", (event) => {
     if (!(event.target instanceof Element)) return;
