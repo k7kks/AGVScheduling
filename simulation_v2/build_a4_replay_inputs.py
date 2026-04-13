@@ -69,6 +69,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--include-cancelled", action="store_true", help="Keep non-'已结束' tasks in the generated payload")
     p.add_argument("--no-bind-history", action="store_true", help="Do not preserve historical AGV bindings in agvRequirements")
     p.add_argument("--no-attach-status", action="store_true", help="Do not embed agvStatusList into the generated tasks payload")
+    p.add_argument("--max-subtasks", type=int, default=0, help="Cap subtask points per task; 0 means no limit")
+    p.add_argument("--round-robin-bind", action="store_true", help="Pre-bind tasks to AGVs in round-robin for balanced allocation")
     return p.parse_args()
 
 
@@ -260,6 +262,7 @@ def build_task_subtasks(
     task_id: str,
     rows: Sequence[Dict[str, str]],
     coord_to_point: Dict[str, MapPoint],
+    max_subtasks: int = 0,
 ) -> Tuple[List[Dict[str, Any]], Optional[MapPoint]]:
     ordered = sorted(rows, key=lambda item: to_int(item.get("子任务执行顺序", ""), 0))
     built: List[Dict[str, Any]] = []
@@ -277,6 +280,8 @@ def build_task_subtasks(
                 location=location,
                 estimated_ms=estimated_ms,
             )
+    if max_subtasks > 0 and len(built) > max_subtasks:
+        built = built[:max_subtasks]
     for seq, item in enumerate(built, start=1):
         item["sequence"] = seq
         item["subTaskId"] = f"{task_id}#{seq}"
@@ -382,7 +387,7 @@ def main() -> int:
         if not rows:
             skipped_missing_subtasks += 1
             continue
-        sub_tasks, initial_status_point = build_task_subtasks(task_id, rows, coord_to_point)
+        sub_tasks, initial_status_point = build_task_subtasks(task_id, rows, coord_to_point, max_subtasks=int(args.max_subtasks))
         if not sub_tasks:
             skipped_missing_points += 1
             continue
@@ -470,6 +475,13 @@ def main() -> int:
                 for agv_id in agv_reqs
                 if str(agv_id).strip() in generated_ids
             ]
+
+    # Round-robin binding: distribute tasks evenly across AGVs
+    if args.round_robin_bind:
+        agv_ids_pool = [str(item.get("deviceId", "")).strip() for item in status_list]
+        if agv_ids_pool:
+            for idx, task in enumerate(selected_tasks):
+                task["agvRequirements"] = [agv_ids_pool[idx % len(agv_ids_pool)]]
 
     clean_tasks_payload: Dict[str, Any] = {
         "schedulingRequestId": f"A4_REAL_REQ_{int(time.time() * 1000)}",

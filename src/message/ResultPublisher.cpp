@@ -386,6 +386,20 @@ static std::string infer_task_type_str(const Task& t) {
     return std::string("");
 }
 
+static json make_subtask_points_json(const Task& t) {
+    json items = json::array();
+    for (const auto& st : t.getSubTasks()) {
+        json item = make_point_json_from_point(st.getPoint());
+        item["sequence"] = st.getSequence();
+        item["point_type"] = st.getPointType();
+        item["location"] = st.getLocation();
+        item["estimated_duration_ms"] = static_cast<long long>(std::max<std::int64_t>(0, st.getEstimatedDurationMs()));
+        item["sub_task_id"] = st.getSubTaskId();
+        items.push_back(std::move(item));
+    }
+    return items;
+}
+
 static void fill_task_type_specific(const Task& t, json& taskJson) {
     const auto& subs = t.getSubTasks();
     auto typeStr = infer_task_type_str(t);
@@ -536,6 +550,7 @@ static json build_allocation_json(
             taskJson["expected_start_time"] = ensure_timestamp(task.getExpectedStartTimeISO(), 0);
             taskJson["expected_completion_time"] = ensure_timestamp(task.getExpectedCompletionTimeISO(), 60);
             fill_task_type_specific(task, taskJson);
+            taskJson["subtask_points"] = make_subtask_points_json(task);
             if (typeStr == "CHARGE") {
                 json charge;
                 charge["min_battery_level"] = task.getMinBatteryLevel();

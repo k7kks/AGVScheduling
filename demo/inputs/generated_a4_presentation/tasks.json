@@ -1,14 +1,14 @@
 {
-  "schedulingRequestId": "A4_REAL_REQ_1776048904812",
-  "requestTimestamp": "2026-04-13T02:55:04.812Z",
+  "schedulingRequestId": "A4_REAL_REQ_1776066606226",
+  "requestTimestamp": "2026-04-13T07:50:06.226Z",
   "requestType": 0,
-  "taskNumber": 122,
+  "taskNumber": 124,
   "triggerContext": {
     "type": "a4-real-history"
   },
   "triggerAgvId": [],
   "batchConfig": {
-    "maxBatchSize": 122
+    "maxBatchSize": 124
   },
   "timeoutMs": 2000,
   "environmentContext": {
@@ -16,69 +16,11 @@
     "systemLoad": 1,
     "systemLoadFactor": 0.0,
     "sourceDir": "/home/hfyy/下载/agv_cluster_scheduling_intergration_v204/demo/source_data/A4产线任务单数据-近1月",
-    "selectedTaskCount": 122,
+    "selectedTaskCount": 124,
     "historicalTaskCount": 754,
     "historicalAgvCount": 30
   },
   "candidateTasks": [
-    {
-      "taskId": "BRIDGE_LR_001",
-      "priority": 10,
-      "taskType": "MATERIAL_TRANSPORT",
-      "subTasks": [
-        {
-          "sequence": 1,
-          "pointType": "PICK_POINT",
-          "point": {
-            "nodeId": 180,
-            "x": 0,
-            "y": 0,
-            "mapCode": "A4_from_xml",
-            "pointCode": "N180"
-          }
-        },
-        {
-          "sequence": 2,
-          "pointType": "DROP_POINT",
-          "point": {
-            "nodeId": 8,
-            "x": 0,
-            "y": 0,
-            "mapCode": "A4_from_xml",
-            "pointCode": "N8"
-          }
-        }
-      ]
-    },
-    {
-      "taskId": "BRIDGE_RL_001",
-      "priority": 10,
-      "taskType": "MATERIAL_TRANSPORT",
-      "subTasks": [
-        {
-          "sequence": 1,
-          "pointType": "PICK_POINT",
-          "point": {
-            "nodeId": 8,
-            "x": 0,
-            "y": 0,
-            "mapCode": "A4_from_xml",
-            "pointCode": "N8"
-          }
-        },
-        {
-          "sequence": 2,
-          "pointType": "DROP_POINT",
-          "point": {
-            "nodeId": 180,
-            "x": 0,
-            "y": 0,
-            "mapCode": "A4_from_xml",
-            "pointCode": "N180"
-          }
-        }
-      ]
-    },
     {
       "taskId": "NG119CA2BDE497C54A",
       "priority": 1,
@@ -129,24 +71,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA2BDE497C54A#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG1",
-          "point": {
-            "x": 594384.0,
-            "y": 479655.0,
-            "angle": 0,
-            "nodeId": "611"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA2BDE497C54A#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV01"
+      ],
       "timestamp": "2026-02-28 13:34:39",
       "expectedStartTime": "2026-02-28T13:34:39+08:00",
       "expectedCompletionTime": "2026-02-28T13:38:31+08:00"
@@ -201,24 +130,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477472800087212032#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "208",
-          "point": {
-            "x": 510667.0,
-            "y": 500000.0,
-            "angle": 0,
-            "nodeId": "586"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477472800087212032#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV02"
+      ],
       "timestamp": "2026-03-01 09:10:35",
       "expectedStartTime": "2026-03-01T09:10:35+08:00"
     },
@@ -272,24 +188,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477474969674842112#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "211",
-          "point": {
-            "x": 515734.0,
-            "y": 507591.0,
-            "angle": 0,
-            "nodeId": "588"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477474969674842112#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV03"
+      ],
       "timestamp": "2026-03-01 09:19:12",
       "expectedStartTime": "2026-03-01T09:19:12+08:00",
       "expectedCompletionTime": "2026-03-01T09:22:07+08:00"
@@ -344,24 +247,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477476741806030848#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "207",
-          "point": {
-            "x": 512438.0,
-            "y": 491337.0,
-            "angle": 0,
-            "nodeId": "573"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477476741806030848#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV04"
+      ],
       "timestamp": "2026-03-01 09:26:14",
       "expectedStartTime": "2026-03-01T09:26:14+08:00"
     },
@@ -415,24 +305,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA753A553F9AT#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX1",
-          "point": {
-            "x": 585351.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "515"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA753A553F9AT#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV05"
+      ],
       "timestamp": "2026-03-01 10:56:42",
       "expectedStartTime": "2026-03-01T10:56:42+08:00"
     },
@@ -473,7 +350,9 @@
           "subTaskId": "K1119CA762AB62FAPG#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV06"
+      ],
       "timestamp": "2026-03-01 11:13:07",
       "expectedStartTime": "2026-03-01T11:13:07+08:00",
       "expectedCompletionTime": "2026-03-01T11:20:11+08:00"
@@ -515,7 +394,9 @@
           "subTaskId": "K1119CA7656CCDFB4H#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV07"
+      ],
       "timestamp": "2026-03-01 11:16:08",
       "expectedStartTime": "2026-03-01T11:16:08+08:00",
       "expectedCompletionTime": "2026-03-01T11:23:32+08:00"
@@ -570,24 +451,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477505889643528192#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "209",
-          "point": {
-            "x": 515719.0,
-            "y": 505311.0,
-            "angle": 0,
-            "nodeId": "589"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477505889643528192#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV08"
+      ],
       "timestamp": "2026-03-01 11:22:02",
       "expectedStartTime": "2026-03-01T11:22:02+08:00",
       "expectedCompletionTime": "2026-03-01T11:23:43+08:00"
@@ -642,24 +510,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477507344605642752#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "208",
-          "point": {
-            "x": 512487.0,
-            "y": 500000.0,
-            "angle": 0,
-            "nodeId": "584"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477507344605642752#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV09"
+      ],
       "timestamp": "2026-03-01 11:27:49",
       "expectedStartTime": "2026-03-01T11:27:49+08:00"
     },
@@ -700,7 +555,9 @@
           "subTaskId": "K1119CA7739E85FDEZ#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV10"
+      ],
       "timestamp": "2026-03-01 11:31:38",
       "expectedStartTime": "2026-03-01T11:31:38+08:00",
       "expectedCompletionTime": "2026-03-01T11:36:32+08:00"
@@ -742,7 +599,9 @@
           "subTaskId": "K1119CA7741157FDH9#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV11"
+      ],
       "timestamp": "2026-03-01 11:32:07",
       "expectedStartTime": "2026-03-01T11:32:07+08:00",
       "expectedCompletionTime": "2026-03-01T11:36:55+08:00"
@@ -797,24 +656,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477510706151555072#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "210",
-          "point": {
-            "x": 515734.0,
-            "y": 507591.0,
-            "angle": 0,
-            "nodeId": "588"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477510706151555072#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV12"
+      ],
       "timestamp": "2026-03-01 11:41:10",
       "expectedStartTime": "2026-03-01T11:41:10+08:00"
     },
@@ -868,24 +714,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477511490540929024#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "207",
-          "point": {
-            "x": 510667.0,
-            "y": 500000.0,
-            "angle": 0,
-            "nodeId": "586"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477511490540929024#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV13"
+      ],
       "timestamp": "2026-03-01 11:44:18",
       "expectedStartTime": "2026-03-01T11:44:18+08:00"
     },
@@ -939,24 +772,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477515431060176896#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "209",
-          "point": {
-            "x": 515719.0,
-            "y": 505311.0,
-            "angle": 0,
-            "nodeId": "589"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477515431060176896#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV14"
+      ],
       "timestamp": "2026-03-01 11:59:57",
       "expectedStartTime": "2026-03-01T11:59:57+08:00",
       "expectedCompletionTime": "2026-03-01T12:58:18+08:00"
@@ -1011,24 +831,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477532802789408768#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "208",
-          "point": {
-            "x": 512487.0,
-            "y": 500000.0,
-            "angle": 0,
-            "nodeId": "584"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477532802789408768#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV15"
+      ],
       "timestamp": "2026-03-01 13:08:59",
       "expectedStartTime": "2026-03-01T13:08:59+08:00",
       "expectedCompletionTime": "2026-03-01T13:10:16+08:00"
@@ -1070,7 +877,9 @@
           "subTaskId": "K1119CA7D1A5C5FN00#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV16"
+      ],
       "timestamp": "2026-03-01 13:14:20",
       "expectedStartTime": "2026-03-01T13:14:20+08:00"
     },
@@ -1111,7 +920,9 @@
           "subTaskId": "K1119CA7D1B99AFN0M#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV17"
+      ],
       "timestamp": "2026-03-01 13:14:25",
       "expectedStartTime": "2026-03-01T13:14:25+08:00",
       "expectedCompletionTime": "2026-03-01T13:18:27+08:00"
@@ -1153,7 +964,9 @@
           "subTaskId": "K1119CA7D388ABFNHI#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV18"
+      ],
       "timestamp": "2026-03-01 13:16:24",
       "expectedStartTime": "2026-03-01T13:16:24+08:00",
       "expectedCompletionTime": "2026-03-01T13:20:32+08:00"
@@ -1195,7 +1008,9 @@
           "subTaskId": "K1119CA7D3E5E5FNJ9#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV19"
+      ],
       "timestamp": "2026-03-01 13:16:47",
       "expectedStartTime": "2026-03-01T13:16:47+08:00"
     },
@@ -1236,7 +1051,9 @@
           "subTaskId": "K1119CA7D52A9BFNPC#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV20"
+      ],
       "timestamp": "2026-03-01 13:18:11",
       "expectedStartTime": "2026-03-01T13:18:11+08:00",
       "expectedCompletionTime": "2026-03-01T13:32:51+08:00"
@@ -1278,7 +1095,9 @@
           "subTaskId": "K1119CA7DB3AE2FOQ3#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV21"
+      ],
       "timestamp": "2026-03-01 13:24:48",
       "expectedStartTime": "2026-03-01T13:24:48+08:00",
       "expectedCompletionTime": "2026-03-01T13:26:32+08:00"
@@ -1320,7 +1139,9 @@
           "subTaskId": "K1119CA7DBF797FOUS#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV22"
+      ],
       "timestamp": "2026-03-01 13:25:36",
       "expectedStartTime": "2026-03-01T13:25:36+08:00",
       "expectedCompletionTime": "2026-03-01T13:35:39+08:00"
@@ -1362,7 +1183,9 @@
           "subTaskId": "K1119CA7DC3191FOW5#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV23"
+      ],
       "timestamp": "2026-03-01 13:25:51",
       "expectedStartTime": "2026-03-01T13:25:51+08:00",
       "expectedCompletionTime": "2026-03-01T13:33:58+08:00"
@@ -1404,7 +1227,9 @@
           "subTaskId": "K1119CA7DCAF7BFOZP#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV24"
+      ],
       "timestamp": "2026-03-01 13:26:23",
       "expectedStartTime": "2026-03-01T13:26:23+08:00",
       "expectedCompletionTime": "2026-03-01T13:36:08+08:00"
@@ -1446,7 +1271,9 @@
           "subTaskId": "K1119CA7DE839BFP9K#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV25"
+      ],
       "timestamp": "2026-03-01 13:28:23",
       "expectedStartTime": "2026-03-01T13:28:23+08:00",
       "expectedCompletionTime": "2026-03-01T13:36:55+08:00"
@@ -1501,24 +1328,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477538624370114560#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "210",
-          "point": {
-            "x": 515734.0,
-            "y": 507591.0,
-            "angle": 0,
-            "nodeId": "588"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477538624370114560#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV26"
+      ],
       "timestamp": "2026-03-01 13:32:06",
       "expectedStartTime": "2026-03-01T13:32:06+08:00"
     },
@@ -1572,24 +1386,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477539466674438144#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "207",
-          "point": {
-            "x": 510667.0,
-            "y": 500000.0,
-            "angle": 0,
-            "nodeId": "586"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477539466674438144#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV27"
+      ],
       "timestamp": "2026-03-01 13:35:27",
       "expectedStartTime": "2026-03-01T13:35:27+08:00"
     },
@@ -1643,24 +1444,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA7E5F684FQEL#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG1",
-          "point": {
-            "x": 594384.0,
-            "y": 479655.0,
-            "angle": 0,
-            "nodeId": "611"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA7E5F684FQEL#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV28"
+      ],
       "timestamp": "2026-03-01 13:36:31",
       "expectedStartTime": "2026-03-01T13:36:31+08:00",
       "expectedCompletionTime": "2026-03-01T13:41:01+08:00"
@@ -1715,24 +1503,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477539778760015872#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "209",
-          "point": {
-            "x": 515719.0,
-            "y": 505311.0,
-            "angle": 0,
-            "nodeId": "589"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477539778760015872#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV29"
+      ],
       "timestamp": "2026-03-01 13:36:42",
       "expectedStartTime": "2026-03-01T13:36:42+08:00",
       "expectedCompletionTime": "2026-03-01T13:38:29+08:00"
@@ -1787,24 +1562,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA7E64594FQGE#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG2",
-          "point": {
-            "x": 594384.0,
-            "y": 481155.0,
-            "angle": 0,
-            "nodeId": "602"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA7E64594FQGE#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV30"
+      ],
       "timestamp": "2026-03-01 13:36:52",
       "expectedStartTime": "2026-03-01T13:36:52+08:00",
       "expectedCompletionTime": "2026-03-01T13:43:30+08:00"
@@ -1859,24 +1621,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477540503783211008#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "208",
-          "point": {
-            "x": 512487.0,
-            "y": 500000.0,
-            "angle": 0,
-            "nodeId": "584"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477540503783211008#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV01"
+      ],
       "timestamp": "2026-03-01 13:39:35",
       "expectedStartTime": "2026-03-01T13:39:35+08:00",
       "expectedCompletionTime": "2026-03-01T13:45:09+08:00"
@@ -1931,24 +1680,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA7EA5657FR69#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX1",
-          "point": {
-            "x": 585351.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "515"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA7EA5657FR69#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV02"
+      ],
       "timestamp": "2026-03-01 13:41:18",
       "expectedStartTime": "2026-03-01T13:41:18+08:00",
       "expectedCompletionTime": "2026-03-01T13:45:56+08:00"
@@ -2003,24 +1739,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA7EC9D8AFRGT#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX2",
-          "point": {
-            "x": 583500.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "516"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA7EC9D8AFRGT#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV03"
+      ],
       "timestamp": "2026-03-01 13:43:47",
       "expectedStartTime": "2026-03-01T13:43:47+08:00",
       "expectedCompletionTime": "2026-03-01T13:46:10+08:00"
@@ -2075,24 +1798,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477543255414407168#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "211",
-          "point": {
-            "x": 515734.0,
-            "y": 507591.0,
-            "angle": 0,
-            "nodeId": "588"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477543255414407168#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV04"
+      ],
       "timestamp": "2026-03-01 13:50:31",
       "expectedStartTime": "2026-03-01T13:50:31+08:00",
       "expectedCompletionTime": "2026-03-01T13:53:09+08:00"
@@ -2147,24 +1857,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477544212802043904#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "207",
-          "point": {
-            "x": 512438.0,
-            "y": 491337.0,
-            "angle": 0,
-            "nodeId": "573"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477544212802043904#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV05"
+      ],
       "timestamp": "2026-03-01 13:54:19",
       "expectedStartTime": "2026-03-01T13:54:19+08:00",
       "expectedCompletionTime": "2026-03-01T13:56:55+08:00"
@@ -2219,24 +1916,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477544755368820736#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "209",
-          "point": {
-            "x": 515719.0,
-            "y": 505311.0,
-            "angle": 0,
-            "nodeId": "589"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477544755368820736#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV06"
+      ],
       "timestamp": "2026-03-01 13:56:28",
       "expectedStartTime": "2026-03-01T13:56:28+08:00",
       "expectedCompletionTime": "2026-03-01T13:58:38+08:00"
@@ -2278,7 +1962,9 @@
           "subTaskId": "K1119CA7F918AFFTJX#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV07"
+      ],
       "timestamp": "2026-03-01 13:57:25",
       "expectedStartTime": "2026-03-01T13:57:25+08:00"
     },
@@ -2319,7 +2005,9 @@
           "subTaskId": "K1119CA7FC36D3FU6J#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV08"
+      ],
       "timestamp": "2026-03-01 14:00:50",
       "expectedStartTime": "2026-03-01T14:00:50+08:00",
       "expectedCompletionTime": "2026-03-01T14:01:50+08:00"
@@ -2374,24 +2062,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477547054321369088#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "208",
-          "point": {
-            "x": 512487.0,
-            "y": 500000.0,
-            "angle": 0,
-            "nodeId": "584"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477547054321369088#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV09"
+      ],
       "timestamp": "2026-03-01 14:05:36",
       "expectedStartTime": "2026-03-01T14:05:36+08:00"
     },
@@ -2445,24 +2120,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477550679458316288#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "210",
-          "point": {
-            "x": 515734.0,
-            "y": 507591.0,
-            "angle": 0,
-            "nodeId": "588"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477550679458316288#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV10"
+      ],
       "timestamp": "2026-03-01 14:20:01",
       "expectedStartTime": "2026-03-01T14:20:01+08:00",
       "expectedCompletionTime": "2026-03-01T14:22:02+08:00"
@@ -2517,24 +2179,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477551864118509568#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "207",
-          "point": {
-            "x": 510667.0,
-            "y": 500000.0,
-            "angle": 0,
-            "nodeId": "586"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477551864118509568#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV11"
+      ],
       "timestamp": "2026-03-01 14:24:43",
       "expectedStartTime": "2026-03-01T14:24:43+08:00",
       "expectedCompletionTime": "2026-03-01T14:26:27+08:00"
@@ -2589,24 +2238,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477553520352690176#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "209",
-          "point": {
-            "x": 515719.0,
-            "y": 505311.0,
-            "angle": 0,
-            "nodeId": "589"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477553520352690176#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV12"
+      ],
       "timestamp": "2026-03-01 14:31:18",
       "expectedStartTime": "2026-03-01T14:31:18+08:00"
     },
@@ -2660,24 +2296,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477555220102774784#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "208",
-          "point": {
-            "x": 512487.0,
-            "y": 500000.0,
-            "angle": 0,
-            "nodeId": "584"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477555220102774784#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV13"
+      ],
       "timestamp": "2026-03-01 14:38:03",
       "expectedStartTime": "2026-03-01T14:38:03+08:00",
       "expectedCompletionTime": "2026-03-01T14:39:42+08:00"
@@ -2732,24 +2355,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477558907340587008#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "210",
-          "point": {
-            "x": 515734.0,
-            "y": 507591.0,
-            "angle": 0,
-            "nodeId": "588"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477558907340587008#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV14"
+      ],
       "timestamp": "2026-03-01 14:52:42",
       "expectedStartTime": "2026-03-01T14:52:42+08:00"
     },
@@ -2803,24 +2413,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477568602495254528#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "208",
-          "point": {
-            "x": 510667.0,
-            "y": 500000.0,
-            "angle": 0,
-            "nodeId": "586"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477568602495254528#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV15"
+      ],
       "timestamp": "2026-03-01 15:31:14",
       "expectedStartTime": "2026-03-01T15:31:14+08:00",
       "expectedCompletionTime": "2026-03-01T15:33:11+08:00"
@@ -2875,24 +2472,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477569115097923584#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "210",
-          "point": {
-            "x": 515734.0,
-            "y": 507591.0,
-            "angle": 0,
-            "nodeId": "588"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477569115097923584#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV16"
+      ],
       "timestamp": "2026-03-01 15:33:16",
       "expectedStartTime": "2026-03-01T15:33:16+08:00",
       "expectedCompletionTime": "2026-03-01T15:39:26+08:00"
@@ -2947,24 +2531,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA87C623BGFZU#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG1",
-          "point": {
-            "x": 594384.0,
-            "y": 479655.0,
-            "angle": 0,
-            "nodeId": "611"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA87C623BGFZU#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV17"
+      ],
       "timestamp": "2026-03-01 16:20:49",
       "expectedStartTime": "2026-03-01T16:20:49+08:00",
       "expectedCompletionTime": "2026-03-01T16:24:40+08:00"
@@ -3019,24 +2590,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA87C9798GG3A#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG2",
-          "point": {
-            "x": 594384.0,
-            "y": 481155.0,
-            "angle": 0,
-            "nodeId": "602"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA87C9798GG3A#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV18"
+      ],
       "timestamp": "2026-03-01 16:21:03",
       "expectedStartTime": "2026-03-01T16:21:03+08:00"
     },
@@ -3090,24 +2648,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA882E26EGHMM#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX2",
-          "point": {
-            "x": 583500.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "516"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA882E26EGHMM#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV19"
+      ],
       "timestamp": "2026-03-01 16:27:55",
       "expectedStartTime": "2026-03-01T16:27:55+08:00"
     },
@@ -3161,24 +2706,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA8865681GIG2#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX1",
-          "point": {
-            "x": 585351.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "515"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA8865681GIG2#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV20"
+      ],
       "timestamp": "2026-03-01 16:31:42",
       "expectedStartTime": "2026-03-01T16:31:42+08:00",
       "expectedCompletionTime": "2026-03-01T16:34:56+08:00"
@@ -3233,24 +2765,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA9189DC1H9BS#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG1",
-          "point": {
-            "x": 594384.0,
-            "y": 479655.0,
-            "angle": 0,
-            "nodeId": "611"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA9189DC1H9BS#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV21"
+      ],
       "timestamp": "2026-03-01 19:11:28",
       "expectedStartTime": "2026-03-01T19:11:28+08:00",
       "expectedCompletionTime": "2026-03-01T19:15:20+08:00"
@@ -3305,24 +2824,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA918E32DH9DJ#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG2",
-          "point": {
-            "x": 594384.0,
-            "y": 481155.0,
-            "angle": 0,
-            "nodeId": "602"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA918E32DH9DJ#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV22"
+      ],
       "timestamp": "2026-03-01 19:11:46",
       "expectedStartTime": "2026-03-01T19:11:46+08:00"
     },
@@ -3376,24 +2882,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA91D3699H9ZN#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX1",
-          "point": {
-            "x": 585351.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "515"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA91D3699H9ZN#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV23"
+      ],
       "timestamp": "2026-03-01 19:16:29",
       "expectedStartTime": "2026-03-01T19:16:29+08:00",
       "expectedCompletionTime": "2026-03-01T19:18:32+08:00"
@@ -3448,24 +2941,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA91DEE12H057#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX2",
-          "point": {
-            "x": 583500.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "516"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA91DEE12H057#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV24"
+      ],
       "timestamp": "2026-03-01 19:17:16",
       "expectedStartTime": "2026-03-01T19:17:16+08:00",
       "expectedCompletionTime": "2026-03-01T19:19:31+08:00"
@@ -3520,24 +3000,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA91FA8A7H0CA#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG1",
-          "point": {
-            "x": 594384.0,
-            "y": 479655.0,
-            "angle": 0,
-            "nodeId": "611"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA91FA8A7H0CA#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV25"
+      ],
       "timestamp": "2026-03-01 19:19:10",
       "expectedStartTime": "2026-03-01T19:19:10+08:00",
       "expectedCompletionTime": "2026-03-01T19:23:39+08:00"
@@ -3592,24 +3059,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA921EA0FH0NB#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG2",
-          "point": {
-            "x": 594384.0,
-            "y": 481155.0,
-            "angle": 0,
-            "nodeId": "602"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA921EA0FH0NB#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV26"
+      ],
       "timestamp": "2026-03-01 19:21:38",
       "expectedStartTime": "2026-03-01T19:21:38+08:00"
     },
@@ -3663,24 +3117,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA9244EFCHA35#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX1",
-          "point": {
-            "x": 585351.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "515"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA9244EFCHA35#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV27"
+      ],
       "timestamp": "2026-03-01 19:24:14",
       "expectedStartTime": "2026-03-01T19:24:14+08:00",
       "expectedCompletionTime": "2026-03-01T19:27:48+08:00"
@@ -3735,24 +3176,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA9270E41HAGM#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX2",
-          "point": {
-            "x": 583500.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "516"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA9270E41HAGM#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV28"
+      ],
       "timestamp": "2026-03-01 19:27:15",
       "expectedStartTime": "2026-03-01T19:27:15+08:00"
     },
@@ -3806,24 +3234,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA927D1DAHALQ#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG1",
-          "point": {
-            "x": 594384.0,
-            "y": 479655.0,
-            "angle": 0,
-            "nodeId": "611"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA927D1DAHALQ#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV29"
+      ],
       "timestamp": "2026-03-01 19:28:05",
       "expectedStartTime": "2026-03-01T19:28:05+08:00",
       "expectedCompletionTime": "2026-03-01T19:31:45+08:00"
@@ -3878,24 +3293,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA92B532CHB5M#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX1",
-          "point": {
-            "x": 585351.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "515"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA92B532CHB5M#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV30"
+      ],
       "timestamp": "2026-03-01 19:31:54",
       "expectedStartTime": "2026-03-01T19:31:54+08:00"
     },
@@ -3949,24 +3351,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA92C045EHB98#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG2",
-          "point": {
-            "x": 594384.0,
-            "y": 481155.0,
-            "angle": 0,
-            "nodeId": "602"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA92C045EHB98#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV01"
+      ],
       "timestamp": "2026-03-01 19:32:40",
       "expectedStartTime": "2026-03-01T19:32:40+08:00",
       "expectedCompletionTime": "2026-03-01T19:35:27+08:00"
@@ -4021,24 +3410,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA92D73DDHBFO#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG1",
-          "point": {
-            "x": 594384.0,
-            "y": 479655.0,
-            "angle": 0,
-            "nodeId": "611"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA92D73DDHBFO#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV02"
+      ],
       "timestamp": "2026-03-01 19:34:14",
       "expectedStartTime": "2026-03-01T19:34:14+08:00",
       "expectedCompletionTime": "2026-03-01T19:38:15+08:00"
@@ -4093,24 +3469,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA92F08DBHBOS#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX2",
-          "point": {
-            "x": 583500.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "516"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA92F08DBHBOS#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV03"
+      ],
       "timestamp": "2026-03-01 19:35:57",
       "expectedStartTime": "2026-03-01T19:35:57+08:00"
     },
@@ -4164,24 +3527,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA9313E5FHBZO#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX1",
-          "point": {
-            "x": 585351.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "515"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA9313E5FHBZO#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV04"
+      ],
       "timestamp": "2026-03-01 19:38:22",
       "expectedStartTime": "2026-03-01T19:38:22+08:00"
     },
@@ -4235,24 +3585,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA9333DE1HCAT#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG2",
-          "point": {
-            "x": 594384.0,
-            "y": 481155.0,
-            "angle": 0,
-            "nodeId": "602"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA9333DE1HCAT#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV05"
+      ],
       "timestamp": "2026-03-01 19:40:33",
       "expectedStartTime": "2026-03-01T19:40:33+08:00",
       "expectedCompletionTime": "2026-03-01T19:45:03+08:00"
@@ -4307,24 +3644,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA9358909HCLK#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG1",
-          "point": {
-            "x": 594384.0,
-            "y": 479655.0,
-            "angle": 0,
-            "nodeId": "611"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA9358909HCLK#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV06"
+      ],
       "timestamp": "2026-03-01 19:43:03",
       "expectedStartTime": "2026-03-01T19:43:03+08:00"
     },
@@ -4378,24 +3702,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA937A638HCYH#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX2",
-          "point": {
-            "x": 583500.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "516"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA937A638HCYH#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV07"
+      ],
       "timestamp": "2026-03-01 19:45:22",
       "expectedStartTime": "2026-03-01T19:45:22+08:00",
       "expectedCompletionTime": "2026-03-01T19:47:47+08:00"
@@ -4450,24 +3761,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA93936EBHD8A#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX1",
-          "point": {
-            "x": 585351.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "515"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA93936EBHD8A#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV08"
+      ],
       "timestamp": "2026-03-01 19:47:05",
       "expectedStartTime": "2026-03-01T19:47:05+08:00"
     },
@@ -4521,24 +3819,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA93A681DHDDI#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG2",
-          "point": {
-            "x": 594384.0,
-            "y": 481155.0,
-            "angle": 0,
-            "nodeId": "602"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA93A681DHDDI#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV09"
+      ],
       "timestamp": "2026-03-01 19:48:23",
       "expectedStartTime": "2026-03-01T19:48:23+08:00",
       "expectedCompletionTime": "2026-03-01T19:50:51+08:00"
@@ -4593,24 +3878,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA93D6600HDTT#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX2",
-          "point": {
-            "x": 583500.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "516"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA93D6600HDTT#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV10"
+      ],
       "timestamp": "2026-03-01 19:51:39",
       "expectedStartTime": "2026-03-01T19:51:39+08:00"
     },
@@ -4664,24 +3936,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA945B3B5HF5D#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG2",
-          "point": {
-            "x": 594384.0,
-            "y": 481155.0,
-            "angle": 0,
-            "nodeId": "602"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA945B3B5HF5D#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV11"
+      ],
       "timestamp": "2026-03-01 20:00:43",
       "expectedStartTime": "2026-03-01T20:00:43+08:00"
     },
@@ -4735,24 +3994,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA94657B7HF8M#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX1",
-          "point": {
-            "x": 585351.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "515"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA94657B7HF8M#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV12"
+      ],
       "timestamp": "2026-03-01 20:01:25",
       "expectedStartTime": "2026-03-01T20:01:25+08:00"
     },
@@ -4806,24 +4052,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA947B395HFE0#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX2",
-          "point": {
-            "x": 583500.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "516"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA947B395HFE0#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV13"
+      ],
       "timestamp": "2026-03-01 20:02:54",
       "expectedStartTime": "2026-03-01T20:02:54+08:00"
     },
@@ -4877,24 +4110,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA949947CHFMR#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG1",
-          "point": {
-            "x": 594384.0,
-            "y": 479655.0,
-            "angle": 0,
-            "nodeId": "611"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA949947CHFMR#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV14"
+      ],
       "timestamp": "2026-03-01 20:04:57",
       "expectedStartTime": "2026-03-01T20:04:57+08:00"
     },
@@ -4948,24 +4168,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA94A56F9HFQV#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG2",
-          "point": {
-            "x": 594384.0,
-            "y": 481155.0,
-            "angle": 0,
-            "nodeId": "602"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA94A56F9HFQV#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV15"
+      ],
       "timestamp": "2026-03-01 20:05:47",
       "expectedStartTime": "2026-03-01T20:05:47+08:00"
     },
@@ -5019,24 +4226,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA94B7FCEHFW9#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX1",
-          "point": {
-            "x": 585351.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "515"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA94B7FCEHFW9#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV16"
+      ],
       "timestamp": "2026-03-01 20:07:03",
       "expectedStartTime": "2026-03-01T20:07:03+08:00",
       "expectedCompletionTime": "2026-03-01T20:09:07+08:00"
@@ -5091,24 +4285,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA94DC8D2HG74#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX2",
-          "point": {
-            "x": 583500.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "516"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA94DC8D2HG74#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV17"
+      ],
       "timestamp": "2026-03-01 20:09:33",
       "expectedStartTime": "2026-03-01T20:09:33+08:00"
     },
@@ -5162,24 +4343,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA94E7D26HGAM#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG1",
-          "point": {
-            "x": 594384.0,
-            "y": 479655.0,
-            "angle": 0,
-            "nodeId": "611"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA94E7D26HGAM#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV18"
+      ],
       "timestamp": "2026-03-01 20:10:19",
       "expectedStartTime": "2026-03-01T20:10:19+08:00",
       "expectedCompletionTime": "2026-03-01T20:12:54+08:00"
@@ -5234,24 +4402,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA950EC80HGLD#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX1",
-          "point": {
-            "x": 585351.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "515"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA950EC80HGLD#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV19"
+      ],
       "timestamp": "2026-03-01 20:12:58",
       "expectedStartTime": "2026-03-01T20:12:58+08:00"
     },
@@ -5305,24 +4460,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA951ED98HGTE#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG2",
-          "point": {
-            "x": 594384.0,
-            "y": 481155.0,
-            "angle": 0,
-            "nodeId": "602"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA951ED98HGTE#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV20"
+      ],
       "timestamp": "2026-03-01 20:14:04",
       "expectedStartTime": "2026-03-01T20:14:04+08:00",
       "expectedCompletionTime": "2026-03-01T20:15:59+08:00"
@@ -5377,24 +4519,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA953F2D2HH4P#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX2",
-          "point": {
-            "x": 583500.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "516"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA953F2D2HH4P#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV21"
+      ],
       "timestamp": "2026-03-01 20:16:17",
       "expectedStartTime": "2026-03-01T20:16:17+08:00",
       "expectedCompletionTime": "2026-03-01T20:20:39+08:00"
@@ -5449,24 +4578,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA954293BHH5T#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG1",
-          "point": {
-            "x": 594384.0,
-            "y": 479655.0,
-            "angle": 0,
-            "nodeId": "611"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA954293BHH5T#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV22"
+      ],
       "timestamp": "2026-03-01 20:16:31",
       "expectedStartTime": "2026-03-01T20:16:31+08:00"
     },
@@ -5520,24 +4636,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA957E1B9HHO9#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX1",
-          "point": {
-            "x": 585351.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "515"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA957E1B9HHO9#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV23"
+      ],
       "timestamp": "2026-03-01 20:20:34",
       "expectedStartTime": "2026-03-01T20:20:34+08:00"
     },
@@ -5591,24 +4694,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA958A4E2HHSN#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG2",
-          "point": {
-            "x": 594384.0,
-            "y": 481155.0,
-            "angle": 0,
-            "nodeId": "602"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA958A4E2HHSN#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV24"
+      ],
       "timestamp": "2026-03-01 20:21:24",
       "expectedStartTime": "2026-03-01T20:21:24+08:00",
       "expectedCompletionTime": "2026-03-01T20:23:07+08:00"
@@ -5663,24 +4753,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA95A9784HI1L#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX2",
-          "point": {
-            "x": 583500.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "516"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA95A9784HI1L#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV25"
+      ],
       "timestamp": "2026-03-01 20:23:32",
       "expectedStartTime": "2026-03-01T20:23:32+08:00",
       "expectedCompletionTime": "2026-03-01T20:26:03+08:00"
@@ -5735,24 +4812,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA96091CBHIQD#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG1",
-          "point": {
-            "x": 594384.0,
-            "y": 479655.0,
-            "angle": 0,
-            "nodeId": "611"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA96091CBHIQD#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV26"
+      ],
       "timestamp": "2026-03-01 20:30:04",
       "expectedStartTime": "2026-03-01T20:30:04+08:00",
       "expectedCompletionTime": "2026-03-01T20:31:56+08:00"
@@ -5807,24 +4871,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA960D476HIS6#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG2",
-          "point": {
-            "x": 594384.0,
-            "y": 481155.0,
-            "angle": 0,
-            "nodeId": "602"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA960D476HIS6#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV27"
+      ],
       "timestamp": "2026-03-01 20:30:21",
       "expectedStartTime": "2026-03-01T20:30:21+08:00",
       "expectedCompletionTime": "2026-03-01T20:33:22+08:00"
@@ -5879,24 +4930,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA9625C2DHIYO#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX1",
-          "point": {
-            "x": 585351.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "515"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA9625C2DHIYO#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV28"
+      ],
       "timestamp": "2026-03-01 20:32:01",
       "expectedStartTime": "2026-03-01T20:32:01+08:00"
     },
@@ -5950,24 +4988,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA963C552HJ5A#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX2",
-          "point": {
-            "x": 583500.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "516"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA963C552HJ5A#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV29"
+      ],
       "timestamp": "2026-03-01 20:33:34",
       "expectedStartTime": "2026-03-01T20:33:34+08:00",
       "expectedCompletionTime": "2026-03-01T20:36:04+08:00"
@@ -6022,24 +5047,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA964BA67HJ90#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG1",
-          "point": {
-            "x": 594384.0,
-            "y": 479655.0,
-            "angle": 0,
-            "nodeId": "611"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA964BA67HJ90#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV30"
+      ],
       "timestamp": "2026-03-01 20:34:36",
       "expectedStartTime": "2026-03-01T20:34:36+08:00",
       "expectedCompletionTime": "2026-03-01T20:36:31+08:00"
@@ -6094,24 +5106,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA9668289HJG8#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX1",
-          "point": {
-            "x": 585351.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "515"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA9668289HJG8#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV01"
+      ],
       "timestamp": "2026-03-01 20:36:33",
       "expectedStartTime": "2026-03-01T20:36:33+08:00",
       "expectedCompletionTime": "2026-03-01T20:38:43+08:00"
@@ -6166,24 +5165,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA966FB81HJI5#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG2",
-          "point": {
-            "x": 594384.0,
-            "y": 481155.0,
-            "angle": 0,
-            "nodeId": "602"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA966FB81HJI5#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV02"
+      ],
       "timestamp": "2026-03-01 20:37:04",
       "expectedStartTime": "2026-03-01T20:37:04+08:00",
       "expectedCompletionTime": "2026-03-01T20:38:51+08:00"
@@ -6238,24 +5224,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA968C31CHJPH#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX2",
-          "point": {
-            "x": 583500.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "516"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA968C31CHJPH#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV03"
+      ],
       "timestamp": "2026-03-01 20:39:01",
       "expectedStartTime": "2026-03-01T20:39:01+08:00",
       "expectedCompletionTime": "2026-03-01T20:40:54+08:00"
@@ -6310,24 +5283,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA969035BHJQQ#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG1",
-          "point": {
-            "x": 594384.0,
-            "y": 479655.0,
-            "angle": 0,
-            "nodeId": "611"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA969035BHJQQ#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV04"
+      ],
       "timestamp": "2026-03-01 20:39:17",
       "expectedStartTime": "2026-03-01T20:39:17+08:00",
       "expectedCompletionTime": "2026-03-01T20:41:21+08:00"
@@ -6382,24 +5342,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA96AEDD8HJYV#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX1",
-          "point": {
-            "x": 585351.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "515"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA96AEDD8HJYV#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV05"
+      ],
       "timestamp": "2026-03-01 20:41:23",
       "expectedStartTime": "2026-03-01T20:41:23+08:00",
       "expectedCompletionTime": "2026-03-01T20:43:54+08:00"
@@ -6454,24 +5401,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA96B6D0FHK1X#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG2",
-          "point": {
-            "x": 594384.0,
-            "y": 481155.0,
-            "angle": 0,
-            "nodeId": "602"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA96B6D0FHK1X#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV06"
+      ],
       "timestamp": "2026-03-01 20:41:55",
       "expectedStartTime": "2026-03-01T20:41:55+08:00"
     },
@@ -6525,24 +5459,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA96DBE63HKAA#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX2",
-          "point": {
-            "x": 583500.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "516"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA96DBE63HKAA#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV07"
+      ],
       "timestamp": "2026-03-01 20:44:27",
       "expectedStartTime": "2026-03-01T20:44:27+08:00"
     },
@@ -6596,24 +5517,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA96E2818HKC1#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG1",
-          "point": {
-            "x": 594384.0,
-            "y": 479655.0,
-            "angle": 0,
-            "nodeId": "611"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA96E2818HKC1#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV08"
+      ],
       "timestamp": "2026-03-01 20:44:54",
       "expectedStartTime": "2026-03-01T20:44:54+08:00",
       "expectedCompletionTime": "2026-03-01T20:47:27+08:00"
@@ -6668,24 +5576,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG119CA96FFE1BHKJW#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "NG2",
-          "point": {
-            "x": 594384.0,
-            "y": 481155.0,
-            "angle": 0,
-            "nodeId": "602"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG119CA96FFE1BHKJW#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV09"
+      ],
       "timestamp": "2026-03-01 20:46:55",
       "expectedStartTime": "2026-03-01T20:46:55+08:00"
     },
@@ -6739,24 +5634,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA97093DFHKMB#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX1",
-          "point": {
-            "x": 585351.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "515"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA97093DFHKMB#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV10"
+      ],
       "timestamp": "2026-03-01 20:47:33",
       "expectedStartTime": "2026-03-01T20:47:33+08:00",
       "expectedCompletionTime": "2026-03-01T20:50:06+08:00"
@@ -6811,24 +5693,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "NG219CA972B98CHKUA#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "FX2",
-          "point": {
-            "x": 583500.0,
-            "y": 482320.0,
-            "angle": 0,
-            "nodeId": "516"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "NG219CA972B98CHKUA#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV11"
+      ],
       "timestamp": "2026-03-01 20:49:54",
       "expectedStartTime": "2026-03-01T20:49:54+08:00",
       "expectedCompletionTime": "2026-03-01T20:52:22+08:00"
@@ -6870,7 +5739,9 @@
           "subTaskId": "K1119CABFECAA5J9BI#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV12"
+      ],
       "timestamp": "2026-03-02 08:42:07",
       "expectedStartTime": "2026-03-02T08:42:07+08:00",
       "expectedCompletionTime": "2026-03-02T08:50:23+08:00"
@@ -6925,24 +5796,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477828096194248704#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "208",
-          "point": {
-            "x": 510667.0,
-            "y": 500000.0,
-            "angle": 0,
-            "nodeId": "586"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477828096194248704#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV13"
+      ],
       "timestamp": "2026-03-02 08:42:21",
       "expectedStartTime": "2026-03-02T08:42:21+08:00",
       "expectedCompletionTime": "2026-03-02T08:44:41+08:00"
@@ -6997,24 +5855,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477828254256594944#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "209",
-          "point": {
-            "x": 515734.0,
-            "y": 507591.0,
-            "angle": 0,
-            "nodeId": "588"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477828254256594944#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV14"
+      ],
       "timestamp": "2026-03-02 08:42:58",
       "expectedStartTime": "2026-03-02T08:42:58+08:00"
     },
@@ -7068,24 +5913,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477828938142056448#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "207",
-          "point": {
-            "x": 512487.0,
-            "y": 500000.0,
-            "angle": 0,
-            "nodeId": "584"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477828938142056448#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV15"
+      ],
       "timestamp": "2026-03-02 08:45:41",
       "expectedStartTime": "2026-03-02T08:45:41+08:00"
     },
@@ -7139,24 +5971,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477829081167822848#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "211",
-          "point": {
-            "x": 515719.0,
-            "y": 505311.0,
-            "angle": 0,
-            "nodeId": "589"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477829081167822848#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV16"
+      ],
       "timestamp": "2026-03-02 08:46:16",
       "expectedStartTime": "2026-03-02T08:46:16+08:00",
       "expectedCompletionTime": "2026-03-02T08:49:58+08:00"
@@ -7198,7 +6017,9 @@
           "subTaskId": "K1119CAC02AF90J9T3#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV17"
+      ],
       "timestamp": "2026-03-02 08:46:23",
       "expectedStartTime": "2026-03-02T08:46:23+08:00"
     },
@@ -7239,7 +6060,9 @@
           "subTaskId": "K1119CAC069F87J08V#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV18"
+      ],
       "timestamp": "2026-03-02 08:50:41",
       "expectedStartTime": "2026-03-02T08:50:41+08:00"
     },
@@ -7280,7 +6103,9 @@
           "subTaskId": "K1119CAC06E5E3J008#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV19"
+      ],
       "timestamp": "2026-03-02 08:50:59",
       "expectedStartTime": "2026-03-02T08:50:59+08:00",
       "expectedCompletionTime": "2026-03-02T08:55:59+08:00"
@@ -7335,24 +6160,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477830917861933056#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "208",
-          "point": {
-            "x": 512438.0,
-            "y": 491337.0,
-            "angle": 0,
-            "nodeId": "573"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477830917861933056#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV20"
+      ],
       "timestamp": "2026-03-02 08:53:33",
       "expectedStartTime": "2026-03-02T08:53:33+08:00",
       "expectedCompletionTime": "2026-03-02T08:55:48+08:00"
@@ -7394,7 +6206,9 @@
           "subTaskId": "K1119CAC09BDF1J0RO#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV21"
+      ],
       "timestamp": "2026-03-02 08:54:05",
       "expectedStartTime": "2026-03-02T08:54:05+08:00",
       "expectedCompletionTime": "2026-03-02T08:55:34+08:00"
@@ -7436,7 +6250,9 @@
           "subTaskId": "K1119CAC0B8399JA88#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV22"
+      ],
       "timestamp": "2026-03-02 08:56:01",
       "expectedStartTime": "2026-03-02T08:56:01+08:00",
       "expectedCompletionTime": "2026-03-02T08:58:44+08:00"
@@ -7491,24 +6307,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477832053092253696#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "210",
-          "point": {
-            "x": 515734.0,
-            "y": 507591.0,
-            "angle": 0,
-            "nodeId": "588"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477832053092253696#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV23"
+      ],
       "timestamp": "2026-03-02 08:58:04",
       "expectedStartTime": "2026-03-02T08:58:04+08:00",
       "expectedCompletionTime": "2026-03-02T09:00:24+08:00"
@@ -7563,24 +6366,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477835055609937920#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 2,
-          "location": "207",
-          "point": {
-            "x": 510667.0,
-            "y": 500000.0,
-            "angle": 0,
-            "nodeId": "586"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477835055609937920#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV24"
+      ],
       "timestamp": "2026-03-02 09:10:00",
       "expectedStartTime": "2026-03-02T09:10:00+08:00",
       "expectedCompletionTime": "2026-03-02T09:11:43+08:00"
@@ -7635,24 +6425,11 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477835194273628160#3"
-        },
-        {
-          "sequence": 4,
-          "pointType": 1,
-          "location": "209",
-          "point": {
-            "x": 515719.0,
-            "y": 505311.0,
-            "angle": 0,
-            "nodeId": "589"
-          },
-          "estimatedDuration": 0,
-          "pathConstraints": [],
-          "maxSpeed": 0,
-          "subTaskId": "1477835194273628160#4"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV25"
+      ],
       "timestamp": "2026-03-02 09:10:33",
       "expectedStartTime": "2026-03-02T09:10:33+08:00",
       "expectedCompletionTime": "2026-03-02T09:12:55+08:00"
@@ -7694,7 +6471,9 @@
           "subTaskId": "K1119CAC1B5C0BJD5J#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV26"
+      ],
       "timestamp": "2026-03-02 09:13:20",
       "expectedStartTime": "2026-03-02T09:13:20+08:00",
       "expectedCompletionTime": "2026-03-02T09:16:27+08:00"
@@ -7736,7 +6515,9 @@
           "subTaskId": "K1119CAC1C9CDBJDAQ#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV27"
+      ],
       "timestamp": "2026-03-02 09:14:42",
       "expectedStartTime": "2026-03-02T09:14:42+08:00",
       "expectedCompletionTime": "2026-03-02T09:16:24+08:00"
@@ -7778,7 +6559,9 @@
           "subTaskId": "K1119CAC1EED74JDLL#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV28"
+      ],
       "timestamp": "2026-03-02 09:17:13",
       "expectedStartTime": "2026-03-02T09:17:13+08:00"
     },
@@ -7819,7 +6602,9 @@
           "subTaskId": "K1119CAC1F86BEJDOW#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV29"
+      ],
       "timestamp": "2026-03-02 09:17:53",
       "expectedStartTime": "2026-03-02T09:17:53+08:00",
       "expectedCompletionTime": "2026-03-02T09:22:31+08:00"
@@ -7861,7 +6646,9 @@
           "subTaskId": "K1119CAC23FC53JEEB#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV30"
+      ],
       "timestamp": "2026-03-02 09:22:45",
       "expectedStartTime": "2026-03-02T09:22:45+08:00",
       "expectedCompletionTime": "2026-03-02T09:27:08+08:00"
@@ -7903,7 +6690,9 @@
           "subTaskId": "K1119CAC24BA8EJELC#2"
         }
       ],
-      "agvRequirements": [],
+      "agvRequirements": [
+        "AGV01"
+      ],
       "timestamp": "2026-03-02 09:23:34",
       "expectedStartTime": "2026-03-02T09:23:34+08:00"
     },
@@ -7957,26 +6746,115 @@
           "pathConstraints": [],
           "maxSpeed": 0,
           "subTaskId": "1477839087573401600#3"
-        },
+        }
+      ],
+      "agvRequirements": [
+        "AGV02"
+      ],
+      "timestamp": "2026-03-02 09:26:01",
+      "expectedStartTime": "2026-03-02T09:26:01+08:00"
+    },
+    {
+      "taskId": "1477839236144037888",
+      "priority": 1,
+      "minBatteryLevel": 0,
+      "taskType": "空车返回(区域)",
+      "subTasks": [
         {
-          "sequence": 4,
+          "sequence": 1,
           "pointType": 2,
-          "location": "208",
+          "location": "211",
           "point": {
-            "x": 512487.0,
-            "y": 500000.0,
+            "x": 512438.0,
+            "y": 491337.0,
             "angle": 0,
-            "nodeId": "584"
+            "nodeId": "573"
           },
           "estimatedDuration": 0,
           "pathConstraints": [],
           "maxSpeed": 0,
-          "subTaskId": "1477839087573401600#4"
+          "subTaskId": "1477839236144037888#1"
+        },
+        {
+          "sequence": 2,
+          "pointType": 0,
+          "location": "211",
+          "point": {
+            "x": 512438.0,
+            "y": 493567.0,
+            "angle": 0,
+            "nodeId": "572"
+          },
+          "estimatedDuration": 0,
+          "pathConstraints": [],
+          "maxSpeed": 0,
+          "subTaskId": "1477839236144037888#2"
+        },
+        {
+          "sequence": 3,
+          "pointType": 0,
+          "location": "211",
+          "point": {
+            "x": 512438.0,
+            "y": 491337.0,
+            "angle": 0,
+            "nodeId": "573"
+          },
+          "estimatedDuration": 0,
+          "pathConstraints": [],
+          "maxSpeed": 0,
+          "subTaskId": "1477839236144037888#3"
         }
       ],
-      "agvRequirements": [],
-      "timestamp": "2026-03-02 09:26:01",
-      "expectedStartTime": "2026-03-02T09:26:01+08:00"
+      "agvRequirements": [
+        "AGV03"
+      ],
+      "timestamp": "2026-03-02 09:26:37",
+      "expectedStartTime": "2026-03-02T09:26:37+08:00"
+    },
+    {
+      "taskId": "K1119CAC279869JF4X",
+      "priority": 1,
+      "minBatteryLevel": 0,
+      "taskType": "株洲中车A4-M4组串KIT搬运",
+      "subTasks": [
+        {
+          "sequence": 1,
+          "pointType": 0,
+          "location": "534872GG493542",
+          "point": {
+            "x": 534872.0,
+            "y": 493542.0,
+            "angle": 0,
+            "nodeId": "563"
+          },
+          "estimatedDuration": 0,
+          "pathConstraints": [],
+          "maxSpeed": 0,
+          "subTaskId": "K1119CAC279869JF4X#1"
+        },
+        {
+          "sequence": 2,
+          "pointType": 1,
+          "location": "534872GG493542",
+          "point": {
+            "x": 533569.0,
+            "y": 504641.0,
+            "angle": 0,
+            "nodeId": "619"
+          },
+          "estimatedDuration": 0,
+          "pathConstraints": [],
+          "maxSpeed": 0,
+          "subTaskId": "K1119CAC279869JF4X#2"
+        }
+      ],
+      "agvRequirements": [
+        "AGV04"
+      ],
+      "timestamp": "2026-03-02 09:26:42",
+      "expectedStartTime": "2026-03-02T09:26:42+08:00",
+      "expectedCompletionTime": "2026-03-02T09:27:50+08:00"
     }
   ],
   "agvStatusList": [
@@ -8000,7 +6878,7 @@
       "endurance": 88,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8023,7 +6901,7 @@
       "endurance": 169,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8046,7 +6924,7 @@
       "endurance": 113,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8069,7 +6947,7 @@
       "endurance": 75,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8092,7 +6970,7 @@
       "endurance": 164,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8115,7 +6993,7 @@
       "endurance": 134,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8138,7 +7016,7 @@
       "endurance": 72,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8161,7 +7039,7 @@
       "endurance": 67,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8184,7 +7062,7 @@
       "endurance": 147,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8207,7 +7085,7 @@
       "endurance": 119,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8230,7 +7108,7 @@
       "endurance": 98,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8253,7 +7131,7 @@
       "endurance": 149,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8276,7 +7154,7 @@
       "endurance": 133,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8299,7 +7177,7 @@
       "endurance": 123,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8322,7 +7200,7 @@
       "endurance": 96,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8345,7 +7223,7 @@
       "endurance": 125,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8368,7 +7246,7 @@
       "endurance": 156,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8391,7 +7269,7 @@
       "endurance": 179,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8414,7 +7292,7 @@
       "endurance": 65,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8437,7 +7315,7 @@
       "endurance": 133,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8460,7 +7338,7 @@
       "endurance": 148,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8483,7 +7361,7 @@
       "endurance": 123,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8506,7 +7384,7 @@
       "endurance": 167,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8529,7 +7407,7 @@
       "endurance": 120,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8552,7 +7430,7 @@
       "endurance": 153,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8575,7 +7453,7 @@
       "endurance": 147,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8598,7 +7476,7 @@
       "endurance": 151,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8621,7 +7499,7 @@
       "endurance": 62,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8644,7 +7522,7 @@
       "endurance": 81,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     },
     {
@@ -8667,7 +7545,7 @@
       "endurance": 67,
       "load": false,
       "errorCode": 0,
-      "updateTime": 1776048904,
+      "updateTime": 1776066606,
       "agv_type": 1
     }
   ]

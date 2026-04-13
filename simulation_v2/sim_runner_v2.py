@@ -204,6 +204,7 @@ def _summarize_candidate_task(task: Dict[str, Any]) -> Dict[str, Any]:
 def _summarize_assigned_task(task: Dict[str, Any]) -> Dict[str, Any]:
     pickup_node = None
     delivery_node = None
+    subtask_nodes: List[int] = []
     pickup = task.get("pickup_point")
     if isinstance(pickup, dict):
         node_id = sim.parse_node_id(pickup.get("nodeId"))
@@ -214,6 +215,29 @@ def _summarize_assigned_task(task: Dict[str, Any]) -> Dict[str, Any]:
         node_id = sim.parse_node_id(delivery.get("nodeId"))
         if node_id is not None:
             delivery_node = int(node_id)
+    raw_subtasks = task.get("subtask_points")
+    if not isinstance(raw_subtasks, list):
+        raw_subtasks = task.get("subtasks")
+    if not isinstance(raw_subtasks, list):
+        raw_subtasks = task.get("subTasks")
+    if isinstance(raw_subtasks, list):
+        for raw_subtask in raw_subtasks:
+            if not isinstance(raw_subtask, dict):
+                continue
+            node_value = sim.parse_node_id(raw_subtask.get("nodeId"))
+            if node_value is None:
+                point = raw_subtask.get("point")
+                if isinstance(point, dict):
+                    node_value = sim.parse_node_id(point.get("nodeId"))
+            if node_value is None:
+                continue
+            value = int(node_value)
+            if not subtask_nodes or subtask_nodes[-1] != value:
+                subtask_nodes.append(value)
+    if pickup_node is None and subtask_nodes:
+        pickup_node = subtask_nodes[0]
+    if delivery_node is None and subtask_nodes:
+        delivery_node = subtask_nodes[-1]
     return {
         "task_id": str(task.get("task_id", "")).strip(),
         "priority": _safe_int(task.get("priority"), 0),
@@ -221,14 +245,17 @@ def _summarize_assigned_task(task: Dict[str, Any]) -> Dict[str, Any]:
         "task_type": str(task.get("task_type", "")).strip(),
         "pickup_node": pickup_node,
         "delivery_node": delivery_node,
+        "subtask_nodes": subtask_nodes[:32],
         "expected_start_time": str(task.get("expected_start_time", "") or ""),
         "expected_completion_time": str(task.get("expected_completion_time", "") or ""),
     }
 
 
-def _route_points_preview(points: List[Any], limit: int = 12) -> List[int]:
+def _route_points_node_ids(points: List[Any], limit: Optional[int] = None) -> List[int]:
     node_ids: List[int] = []
-    for pt in points[: max(1, int(limit))]:
+    max_items = None if limit is None else max(1, int(limit))
+    iterable = points if max_items is None else points[:max_items]
+    for pt in iterable:
         node_id = getattr(pt, "node_id", None)
         parsed = sim.parse_node_id(node_id)
         if parsed is None:
@@ -237,6 +264,38 @@ def _route_points_preview(points: List[Any], limit: int = 12) -> List[int]:
         if not node_ids or node_ids[-1] != value:
             node_ids.append(value)
     return node_ids
+
+
+def _payload_segment_node_ids(path_info: Dict[str, Any]) -> List[int]:
+    node_ids: List[int] = []
+    raw_points = path_info.get("pathPoints")
+    points = list(raw_points) if isinstance(raw_points, list) else []
+    if not points:
+        for key in ("startPoint", "endPoint"):
+            candidate = path_info.get(key)
+            if isinstance(candidate, dict):
+                points.append(candidate)
+    for pt in points:
+        if not isinstance(pt, dict):
+            continue
+        parsed = sim.parse_node_id(pt.get("nodeId"))
+        if parsed is None:
+            continue
+        value = int(parsed)
+        if not node_ids or node_ids[-1] != value:
+            node_ids.append(value)
+    return node_ids
+
+
+def _payload_path_segments(payload: Dict[str, Any]) -> List[List[int]]:
+    segments: List[List[int]] = []
+    for info in payload.get("pathInfos", []) or []:
+        if not isinstance(info, dict):
+            continue
+        node_ids = _payload_segment_node_ids(info)
+        if node_ids:
+            segments.append(node_ids)
+    return segments
 
 
 def _normalize_reserved_nodes(nodes: List[Any]) -> List[Dict[str, Any]]:
@@ -384,7 +443,16 @@ class ReplayRecorder:
         device_id = str(payload.get("deviceId", "") or "").strip()
         if not device_id:
             return
-        signature = tuple(_route_points_preview(points, limit=16))
+        segments = _payload_path_segments(payload)
+        route_node_ids: List[int] = []
+        for segment in segments:
+            for node_value in segment:
+                if not route_node_ids or route_node_ids[-1] != node_value:
+                    route_node_ids.append(node_value)
+        if not route_node_ids:
+            route_node_ids = _route_points_node_ids(points)
+        first_segment_node_ids = list(segments[0]) if segments else []
+        signature = tuple(route_node_ids)
         if signature == self._last_path_signature.get(device_id):
             return
         self._last_path_signature[device_id] = signature
@@ -392,7 +460,9 @@ class ReplayRecorder:
             "path_update",
             sim_time_s=sim_time_s,
             device_id=device_id,
-            node_ids=list(signature),
+            node_ids=route_node_ids,
+            first_segment_node_ids=first_segment_node_ids,
+            segment_count=len(segments),
             point_count=len(points),
             sub_task_id=str(payload.get("subTaskId", "") or ""),
             task_priority=_safe_int(payload.get("taskPriority"), 0),
@@ -402,7 +472,7 @@ class ReplayRecorder:
         device_id = str(payload.get("deviceId", "") or "").strip()
         if not device_id:
             return
-        signature = tuple(_route_points_preview(points, limit=16))
+        signature = tuple(_route_points_node_ids(points, limit=16))
         if signature == self._last_trail_signature.get(device_id):
             return
         self._last_trail_signature[device_id] = signature
@@ -2500,13 +2570,14 @@ def main() -> int:
             return
         if routing_key == env("ALGO_PATH_RESPONSE_ROUTING_KEY", "RobotPathResponse"):
             device_id = payload.get("deviceId", "")
-            points = sim.extract_path_points(payload, graph)
+            raw_points = sim.extract_path_points(payload, graph)
+            points = raw_points
             if snap_to_map and points:
                 points = sim.snap_points_to_map(graph, points, f"path/{device_id or '-'}")
             if device_id:
                 state.set_path(device_id, points)
                 if recorder is not None:
-                    recorder.record_path_response(payload, points, sim_time_s=state.sim_time_s())
+                    recorder.record_path_response(payload, raw_points, sim_time_s=state.sim_time_s())
         elif routing_key == env("ALGO_TRAIL_RESPONSE_ROUTING_KEY", "RobotTrailResponse"):
             device_id = payload.get("deviceId", "")
             points = sim.extract_trail_points(payload, graph)

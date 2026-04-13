@@ -141,12 +141,16 @@ function zoomForBounds(canvas, bounds, padding = 0.16) {
 }
 
 function currentFrameIndex() {
+  return frameIndexAt(replay.currentTimeS);
+}
+
+function frameIndexAt(timeS) {
   if (!replay.frameTimes.length) return 0;
   let lo = 0;
   let hi = replay.frameTimes.length - 1;
   while (lo <= hi) {
     const mid = Math.floor((lo + hi) / 2);
-    if (replay.frameTimes[mid] <= replay.currentTimeS) {
+    if (replay.frameTimes[mid] <= timeS) {
       lo = mid + 1;
     } else {
       hi = mid - 1;
@@ -155,8 +159,84 @@ function currentFrameIndex() {
   return Math.max(0, Math.min(replay.frames.length - 1, hi));
 }
 
+function interpolateNumber(a, b, t) {
+  const av = Number(a);
+  const bv = Number(b);
+  if (Number.isFinite(av) && Number.isFinite(bv)) return lerp(av, bv, t);
+  if (Number.isFinite(av)) return av;
+  if (Number.isFinite(bv)) return bv;
+  return 0;
+}
+
+function interpolateAngleDeg(a, b, t) {
+  const av = Number(a);
+  const bv = Number(b);
+  if (!Number.isFinite(av) || !Number.isFinite(bv)) return Number.isFinite(av) ? av : (Number.isFinite(bv) ? bv : 0);
+  let delta = bv - av;
+  while (delta > 180) delta -= 360;
+  while (delta < -180) delta += 360;
+  return av + delta * t;
+}
+
+function interpolateAgv(prevAgv, nextAgv, t) {
+  if (!prevAgv) return nextAgv || null;
+  if (!nextAgv) return prevAgv;
+  const pick = t < 0.5 ? prevAgv : nextAgv;
+  return {
+    ...pick,
+    id: String(pick.id ?? prevAgv.id ?? nextAgv.id ?? ""),
+    x: interpolateNumber(prevAgv.x, nextAgv.x, t),
+    y: interpolateNumber(prevAgv.y, nextAgv.y, t),
+    angle: interpolateAngleDeg(prevAgv.angle, nextAgv.angle, t),
+    speed: interpolateNumber(prevAgv.speed, nextAgv.speed, t),
+    phaseLeftS: interpolateNumber(prevAgv.phaseLeftS, nextAgv.phaseLeftS, t),
+    phaseTotalS: interpolateNumber(prevAgv.phaseTotalS, nextAgv.phaseTotalS, t),
+    trail: Array.isArray(pick.trail) ? pick.trail : [],
+    path: Array.isArray(pick.path) ? pick.path : [],
+  };
+}
+
 function currentFrame() {
-  return replay.frames[currentFrameIndex()] || { agvs: [], reserved_nodes: [] };
+  if (!replay.frames.length) return { agvs: [], reserved_nodes: [] };
+  if (replay.frames.length === 1) return replay.frames[0] || { agvs: [], reserved_nodes: [] };
+  const prevIndex = frameIndexAt(replay.currentTimeS);
+  const nextIndex = Math.min(replay.frames.length - 1, prevIndex + 1);
+  const prevFrame = replay.frames[prevIndex] || { agvs: [], reserved_nodes: [] };
+  const nextFrame = replay.frames[nextIndex] || prevFrame;
+  const prevTime = Number(replay.frameTimes[prevIndex] || 0);
+  const nextTime = Number(replay.frameTimes[nextIndex] || prevTime);
+  const span = Math.max(0.0001, nextTime - prevTime);
+  const alpha = nextIndex === prevIndex ? 0 : clamp((replay.currentTimeS - prevTime) / span, 0, 1);
+  if (alpha <= 0.0001) return prevFrame;
+  if (alpha >= 0.9999) return nextFrame;
+
+  const nextById = new Map();
+  for (const agv of nextFrame.agvs || []) {
+    nextById.set(String(agv.id ?? ""), agv);
+  }
+
+  const agvs = [];
+  const seen = new Set();
+  for (const prevAgv of prevFrame.agvs || []) {
+    const key = String(prevAgv.id ?? "");
+    const nextAgv = nextById.get(key);
+    agvs.push(interpolateAgv(prevAgv, nextAgv, alpha));
+    seen.add(key);
+  }
+  for (const nextAgv of nextFrame.agvs || []) {
+    const key = String(nextAgv.id ?? "");
+    if (seen.has(key)) continue;
+    agvs.push(nextAgv);
+  }
+
+  return {
+    ...(alpha < 0.5 ? prevFrame : nextFrame),
+    sim_time_s: replay.currentTimeS,
+    agvs,
+    reserved_nodes: Array.isArray(alpha < 0.5 ? prevFrame.reserved_nodes : nextFrame.reserved_nodes)
+      ? (alpha < 0.5 ? prevFrame.reserved_nodes : nextFrame.reserved_nodes)
+      : [],
+  };
 }
 
 function currentSceneAt(timeS) {
@@ -263,6 +343,49 @@ function pointForNode(nodeId) {
   return replay.map?.nodePositions?.[key] || null;
 }
 
+function subtaskMarkersForPath(pathInfo) {
+  if (!pathInfo || typeof pathInfo !== "object") return [];
+  const rawMarkers = Array.isArray(pathInfo.subtask_points) ? pathInfo.subtask_points : [];
+  const markers = [];
+
+  for (let i = 0; i < rawMarkers.length; i += 1) {
+    const raw = rawMarkers[i];
+    if (!raw || typeof raw !== "object") continue;
+    const nodeId = parseNodeId(raw.nodeId);
+    let x = Number(raw.x);
+    let y = Number(raw.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      const pos = pointForNode(nodeId);
+      if (!pos) continue;
+      x = Number(pos.x);
+      y = Number(pos.y);
+    }
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    markers.push({
+      x,
+      y,
+      nodeId,
+      sequence: Number(raw.sequence) > 0 ? Number(raw.sequence) : markers.length + 1,
+    });
+  }
+
+  if (markers.length > 0) return markers;
+
+  const first = pathInfo.first_subtask;
+  if (!first || typeof first !== "object") return [];
+  const nodeId = parseNodeId(first.nodeId);
+  let x = Number(first.x);
+  let y = Number(first.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    const pos = pointForNode(nodeId);
+    if (!pos) return [];
+    x = Number(pos.x);
+    y = Number(pos.y);
+  }
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return [];
+  return [{ x, y, nodeId, sequence: 1 }];
+}
+
 function allAgvIds() {
   const ids = [];
   const seen = new Set();
@@ -289,6 +412,7 @@ function allAgvIds() {
 
 function focusDescriptor(frame, event) {
   const scene = currentScene();
+  const isAssignment = scene && String(scene.kind || "").includes("assignment");
   const agvIds = new Set();
   const nodeIds = new Set();
   const rawFocus = event?.focus || scene?.focus || {};
@@ -296,8 +420,17 @@ function focusDescriptor(frame, event) {
   if (replay.followAgvId) {
     agvIds.add(replay.followAgvId);
     const firstPath = replay.firstPaths?.[replay.followAgvId];
-    const subtaskNodeId = firstPath ? parseNodeId(firstPath.first_subtask?.nodeId) : null;
-    if (subtaskNodeId !== null) nodeIds.add(subtaskNodeId);
+    const markers = subtaskMarkersForPath(firstPath);
+    if (isAssignment) {
+      const firstMarker = markers[0];
+      const subtaskNodeId = firstMarker ? parseNodeId(firstMarker.nodeId) : null;
+      if (subtaskNodeId !== null) nodeIds.add(subtaskNodeId);
+    } else {
+      for (const marker of markers) {
+        const subtaskNodeId = parseNodeId(marker.nodeId);
+        if (subtaskNodeId !== null) nodeIds.add(subtaskNodeId);
+      }
+    }
   } else if (Array.isArray(rawFocus.agv_ids)) {
     // No explicitly followed AGV — use scene/event focus AGVs
     for (const id of rawFocus.agv_ids) {
@@ -323,6 +456,8 @@ function focusDescriptor(frame, event) {
 
 function collectFocusPoints(frame, focus) {
   const points = [];
+  const scene = currentScene();
+  const isAssignment = scene && String(scene.kind || "").includes("assignment");
   const pushPoint = (x, y) => {
     if (Number.isFinite(Number(x)) && Number.isFinite(Number(y))) {
       points.push({ x: Number(x), y: Number(y) });
@@ -347,10 +482,17 @@ function collectFocusPoints(frame, focus) {
       pushPoint(pt.x, pt.y);
     }
     const firstPath = replay.firstPaths?.[agvId];
-    if (firstPath && Array.isArray(firstPath.points)) {
-      for (const pt of firstPath.points.slice(0, 16)) {
+    const routePointsForFocus =
+      isAssignment
+        ? (Array.isArray(firstPath?.assignment_points) ? firstPath.assignment_points : [])
+        : firstPath?.points;
+    if (Array.isArray(routePointsForFocus)) {
+      for (const pt of routePointsForFocus) {
         pushPoint(pt.x, pt.y);
       }
+    }
+    for (const marker of subtaskMarkersForPath(firstPath)) {
+      pushPoint(marker.x, marker.y);
     }
   }
 
@@ -649,9 +791,9 @@ function drawSubtaskMarker(ctx, transform, pt, label) {
   ctx.fillText(label, sp.cx + 14, sp.cy - 6);
 }
 
-function drawSelectedFirstPath(ctx, transform) {
+function drawSelectedFirstPath(ctx, transform, frame, event) {
   const scene = currentScene();
-  const focus = focusDescriptor(currentFrame(), currentEvent());
+  const focus = focusDescriptor(frame, event);
   
   // Only draw paths when user explicitly selected an AGV
   // or for conflict/bridge scenes (≤2 AGVs where paths are informative)
@@ -679,19 +821,14 @@ function drawSelectedFirstPath(ctx, transform) {
     const subtask = pathInfo.first_subtask;
     const subtaskNodeId = subtask ? parseNodeId(subtask.nodeId) : null;
     const subtaskNodes = Array.isArray(pathInfo.subtask_nodes) ? pathInfo.subtask_nodes : [];
+    const subtaskMarkers = subtaskMarkersForPath(pathInfo);
     const lineColor = pathColors[colorIdx % pathColors.length];
     colorIdx += 1;
 
-    // Assignment scene: truncate at first subtask; others: show full path
-    let displayPoints = pathInfo.points;
-    if (isAssignment && subtaskNodeId !== null) {
-      for (let i = 0; i < pathInfo.points.length; i += 1) {
-        if (parseNodeId(pathInfo.points[i].nodeId) === subtaskNodeId) {
-          displayPoints = pathInfo.points.slice(0, i + 1);
-          break;
-        }
-      }
-    }
+    // Assignment scene uses the raw first segment from PathResponse; other scenes show the full route.
+    let displayPoints = isAssignment
+      ? (Array.isArray(pathInfo.assignment_points) ? pathInfo.assignment_points : [])
+      : pathInfo.points;
     if (displayPoints.length < 2) continue;
 
     ctx.save();
@@ -712,10 +849,17 @@ function drawSelectedFirstPath(ctx, transform) {
       ctx.fill();
     }
 
-    // Highlight subtask node(s) along the displayed path
+    // Highlight the selected AGV's subtask points according to the current scene.
     if (isAssignment) {
-      if (subtask && Number.isFinite(Number(subtask.x)) && Number.isFinite(Number(subtask.y))) {
-        drawSubtaskMarker(ctx, transform, subtask, `${agvId} 首个子任务点`);
+      const firstMarker = subtaskMarkers[0];
+      if (firstMarker) {
+        drawSubtaskMarker(ctx, transform, firstMarker, `${agvId} 首个子任务点`);
+      }
+    } else if (subtaskMarkers.length > 0) {
+      for (let i = 0; i < subtaskMarkers.length; i += 1) {
+        const marker = subtaskMarkers[i];
+        const labelIdx = Number(marker.sequence) > 0 ? Number(marker.sequence) : i + 1;
+        drawSubtaskMarker(ctx, transform, marker, `${agvId} 子任务点 ${labelIdx}`);
       }
     } else {
       const subtaskSet = new Set(subtaskNodes.map(n => Number(n)));
@@ -752,7 +896,10 @@ function drawSelectedFirstPath(ctx, transform) {
 
 function drawAgvs(ctx, transform, frame, focus, event) {
   const mode = replay.displayMode;
-  const hasEmphasis = replay.highlightFocus && Boolean(replay.followAgvId);
+  const scene = currentScene();
+  const sceneKind = String(scene?.kind || "");
+  const isSceneWithFocus = (sceneKind.includes("conflict") || sceneKind === "bridge") && focus.agvIds.length > 0;
+  const hasEmphasis = replay.highlightFocus && (Boolean(replay.followAgvId) || isSceneWithFocus);
   const pulse = 0.5 + 0.5 * Math.sin(replay.currentTimeS * 7.2);
   for (let i = 0; i < frame.agvs.length; i += 1) {
     const agv = frame.agvs[i];
@@ -835,7 +982,7 @@ function drawScene(ctx, canvas, frame, event, variant) {
   drawBackdrop(ctx, canvas, focus, event);
   drawReserved(ctx, transform, frame, focus);
   drawAgvs(ctx, transform, frame, focus, event);
-  drawSelectedFirstPath(ctx, transform);
+  drawSelectedFirstPath(ctx, transform, frame, event);
   drawFocusNodes(ctx, transform, focus);
 }
 
@@ -978,10 +1125,11 @@ function renderDetailCards(scene) {
                 const agvId = String(item.agv_id || "").trim();
                 const active = agvId && agvId === replay.followAgvId;
                 const mainText = type === "assignment_result" ? escapeHtml(item.task_chain_text || "-") : escapeHtml(item.route_text || "-");
+                const subtaskCount = Number(item.subtask_count || 0);
                 const subText =
                   type === "assignment_result"
-                    ? `${item.has_first_path ? "点击可高亮" : "当前无首个Path"} · 等效时间 ${escapeHtml(item.eta_text || "-")}`
-                    : `点击可高亮 · Path 点数 ${escapeHtml(item.point_count ?? "-")}`;
+                    ? `${item.has_first_path ? "点击可高亮首个子任务点和首段路径" : "当前无可高亮路径"} · 等效时间 ${escapeHtml(item.eta_text || "-")}`
+                    : `点击可高亮全局路径 · Path ${escapeHtml(item.point_count ?? "-")} 点${subtaskCount > 0 ? ` · 子任务点 ${escapeHtml(subtaskCount)}` : ""}`;
                 const statusText =
                   type === "assignment_result"
                     ? (item.assigned === false ? "未接单" : "已接单")
@@ -1000,7 +1148,7 @@ function renderDetailCards(scene) {
               })
               .join("")}
           </div>
-          <div class="focus-hint">点击 AGV 后，会在主画面中高亮该车第一次计算出的全局 Path。</div>
+          <div class="focus-hint">${type === "assignment_result" ? "点击 AGV 后，会高亮该车到首个子任务点的路径，并标出第一个子任务点。" : "点击 AGV 后，会高亮该车覆盖全部子任务点的全局路径，并标出所有子任务点。"}</div>
         </div>
       `);
       continue;
@@ -1048,7 +1196,7 @@ function updateBanner(event) {
     if (replay.followAgvId) {
       eyebrow.textContent = "AGV Focus";
       title.textContent = `跟随 ${replay.followAgvId}`;
-      desc.textContent = "当前没有激活高层场景，主画面保持巡航，并持续高亮你选中的 AGV 首次全局 Path。";
+      desc.textContent = "当前没有激活高层场景，主画面保持巡航，并持续高亮你选中的 AGV 全局路径和子任务点。";
       focusTitle.textContent = `AGV ${replay.followAgvId}`;
       focusSubtitle.textContent = "点击右侧 AGV 卡片后，这里会保持聚焦显示。";
     } else {
@@ -1359,6 +1507,10 @@ function tick(ts) {
     const newSceneId = currentScene()?.scene_id || "";
     const sceneChanged = newSceneId && newSceneId !== prevSceneId;
     if (sceneChanged || jumped) {
+      // Auto-clear user selection so scene's own focus AGVs take over
+      if (sceneChanged && replay.autoDirector) {
+        replay.followAgvId = "";
+      }
       render({ autoSnap: true, forceEventList: true });
     } else {
       render();

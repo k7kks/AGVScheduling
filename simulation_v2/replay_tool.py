@@ -138,34 +138,162 @@ def route_intersects_bridge(node_ids: List[Any], bridge_node_set: set[int]) -> b
     return False
 
 
+def longest_bridge_component(map_json: Dict[str, Any]) -> set[int]:
+    bridge_nodes = {node_id(x) for x in map_json.get("bridgeNodeIds", []) or []}
+    bridge_node_set = {int(x) for x in bridge_nodes if x is not None}
+    if not bridge_node_set:
+        return set()
+
+    node_pos: Dict[int, Tuple[float, float]] = {}
+    for n in map_json.get("nodes", []) or []:
+        nid = node_id(n.get("id"))
+        if nid is None:
+            continue
+        node_pos[nid] = (safe_float(n.get("x"), 0.0), safe_float(n.get("y"), 0.0))
+
+    adj: Dict[int, set[int]] = {nid: set() for nid in bridge_node_set}
+    for edge in map_json.get("bridgeEdges", []) or []:
+        a = node_id(edge.get("startNode", edge.get("startNodeId")))
+        b = node_id(edge.get("endNode", edge.get("endNodeId")))
+        if a is None or b is None:
+            continue
+        if a not in bridge_node_set or b not in bridge_node_set:
+            continue
+        adj.setdefault(a, set()).add(b)
+        adj.setdefault(b, set()).add(a)
+
+    best_nodes: set[int] = set()
+    best_score = (-1.0, -1)
+    remaining = set(bridge_node_set)
+    while remaining:
+        start = next(iter(remaining))
+        stack = [start]
+        comp: set[int] = set()
+        while stack:
+            node = stack.pop()
+            if node in comp:
+                continue
+            comp.add(node)
+            remaining.discard(node)
+            for nb in adj.get(node, set()):
+                if nb not in comp:
+                    stack.append(nb)
+
+        total_len = 0.0
+        seen_edges: set[Tuple[int, int]] = set()
+        for a in comp:
+            for b in adj.get(a, set()):
+                edge_key = (min(a, b), max(a, b))
+                if edge_key in seen_edges:
+                    continue
+                seen_edges.add(edge_key)
+                pa = node_pos.get(a)
+                pb = node_pos.get(b)
+                if pa and pb:
+                    total_len += ((pa[0] - pb[0]) ** 2 + (pa[1] - pb[1]) ** 2) ** 0.5
+        score = (total_len, len(comp))
+        if score > best_score:
+            best_score = score
+            best_nodes = comp
+    return best_nodes
+
+
+def normalize_route_node_ids(values: List[Any]) -> List[int]:
+    out: List[int] = []
+    for value in values or []:
+        parsed = node_id(value)
+        if parsed is None:
+            continue
+        if not out or out[-1] != parsed:
+            out.append(parsed)
+    return out
+
+
+def merge_route_nodes(base: List[int], segment: List[int]) -> List[int]:
+    if not base:
+        return list(segment)
+    if not segment:
+        return list(base)
+
+    max_overlap = min(len(base), len(segment))
+    for overlap in range(max_overlap, 0, -1):
+        if base[-overlap:] == segment[:overlap]:
+            return base + segment[overlap:]
+
+    tail = base[-1]
+    try:
+        idx = segment.index(tail)
+    except ValueError:
+        return base + segment
+    return base + segment[idx + 1 :]
+
+
+def points_from_route(node_ids: List[int], node_pos: Dict[int, Tuple[float, float]]) -> List[Dict[str, Any]]:
+    points: List[Dict[str, Any]] = []
+    for nid in node_ids:
+        if nid not in node_pos:
+            continue
+        x, y = node_pos[nid]
+        points.append({"x": x, "y": y, "nodeId": nid})
+    return points
+
+
+def assignment_subtask_nodes(tasks: List[Dict[str, Any]]) -> List[int]:
+    ordered: List[int] = []
+    for task in tasks or []:
+        if not isinstance(task, dict):
+            continue
+        raw_nodes = task.get("subtask_nodes")
+        if isinstance(raw_nodes, list) and raw_nodes:
+            for raw_nid in raw_nodes:
+                nid = node_id(raw_nid)
+                if nid is None:
+                    continue
+                if not ordered or ordered[-1] != nid:
+                    ordered.append(nid)
+            continue
+        for key in ("pickup_node", "delivery_node"):
+            nid = node_id(task.get(key))
+            if nid is None:
+                continue
+            if not ordered or ordered[-1] != nid:
+                ordered.append(nid)
+    return ordered
+
+
 def extract_first_paths(
     frames: List[Dict[str, Any]],
     raw_events: List[Dict[str, Any]],
     map_json: Dict[str, Any],
 ) -> Dict[str, Dict[str, Any]]:
-    """Build first_paths from path_update events (planner's planned routes)."""
+    """Build first_paths from path_update events, stitching a global route per AGV when possible."""
     node_pos: Dict[int, Tuple[float, float]] = {}
     for n in map_json.get("nodes", []):
         nid = node_id(n.get("id"))
         if nid is not None:
             node_pos[nid] = (safe_float(n.get("x"), 0.0), safe_float(n.get("y"), 0.0))
 
-    # Use first path_update per AGV — the planner's static planned route
     path_updates = sorted(
         [e for e in raw_events if str(e.get("kind", "")).strip() == "path_update"],
         key=lambda e: safe_float(e.get("sim_time_s"), 0.0),
     )
-    routes: Dict[str, Tuple[List[int], float]] = {}  # agv_id -> (node_ids, sim_time_s)
+    routes_by_agv: Dict[str, List[Dict[str, Any]]] = {}
     for pu in path_updates:
         agv_id = str(pu.get("device_id", "")).strip()
-        if not agv_id or agv_id in routes:
+        if not agv_id:
             continue
-        nids = [node_id(x) for x in pu.get("node_ids", [])]
-        nids = [n for n in nids if n is not None]
+        nids = normalize_route_node_ids(list(pu.get("node_ids") or []))
+        first_segment_nids = normalize_route_node_ids(list(pu.get("first_segment_node_ids") or []))
         if len(nids) >= 2:
-            routes[agv_id] = (nids, safe_float(pu.get("sim_time_s"), 0.0))
+            routes_by_agv.setdefault(agv_id, []).append(
+                {
+                    "start_s": safe_float(pu.get("sim_time_s"), 0.0),
+                    "node_ids": nids,
+                    "first_segment_node_ids": first_segment_nids,
+                    "sub_task_id": str(pu.get("sub_task_id", "") or "").strip(),
+                }
+            )
 
-    # Capture first subtask from frames
     first_subtask: Dict[str, Optional[Dict[str, Any]]] = {}
     for frame in frames:
         for agv in frame.get("agvs", []) or []:
@@ -180,16 +308,95 @@ def extract_first_paths(
             st = agv.get("nextSubtask")
             first_subtask[agv_id] = dict(st) if isinstance(st, dict) else None
 
+    first_assignment_by_agv: Dict[str, Dict[str, Any]] = {}
+    for raw in sorted(
+        [e for e in raw_events if str(e.get("kind", "")).strip() == "assignment"],
+        key=lambda e: safe_float(e.get("sim_time_s"), 0.0),
+    ):
+        sim_time_s = safe_float(raw.get("sim_time_s"), 0.0)
+        assignments = raw.get("assignments")
+        if not isinstance(assignments, list):
+            continue
+        for entry in assignments:
+            if not isinstance(entry, dict):
+                continue
+            agv_id = str(entry.get("agv_id", "")).strip()
+            tasks = entry.get("tasks")
+            if not agv_id or agv_id in first_assignment_by_agv:
+                continue
+            if not isinstance(tasks, list) or not tasks:
+                continue
+            first_assignment_by_agv[agv_id] = {
+                "start_s": sim_time_s,
+                "subtask_nodes": assignment_subtask_nodes(tasks),
+            }
+
     first_paths: Dict[str, Dict[str, Any]] = {}
-    for agv_id, (route, start_s) in routes.items():
-        st = first_subtask.get(agv_id)
-        points: List[Dict[str, Any]] = []
-        for nid in route:
-            if nid in node_pos:
-                x, y = node_pos[nid]
-                points.append({"x": x, "y": y, "nodeId": nid})
+    for agv_id, updates in routes_by_agv.items():
+        if not updates:
+            continue
+
+        assignment_info = first_assignment_by_agv.get(agv_id)
+        preferred_updates = updates
+        subtask_nodes = list((assignment_info or {}).get("subtask_nodes") or [])
+        if assignment_info is not None:
+            threshold_s = safe_float(assignment_info.get("start_s"), 0.0) - 0.25
+            filtered = [item for item in updates if safe_float(item.get("start_s"), 0.0) >= threshold_s]
+            if filtered:
+                preferred_updates = filtered
+
+        route: List[int] = []
+        start_s = safe_float(preferred_updates[0].get("start_s"), 0.0)
+        assignment_route = list(preferred_updates[0].get("first_segment_node_ids") or [])
+        covered_subtasks = 0
+        for update in preferred_updates:
+            segment = list(update.get("node_ids") or [])
+            if len(segment) < 2:
+                continue
+            if not route:
+                route = list(segment)
+                start_s = safe_float(update.get("start_s"), 0.0)
+            else:
+                route = merge_route_nodes(route, segment)
+            while covered_subtasks < len(subtask_nodes) and subtask_nodes[covered_subtasks] in route:
+                covered_subtasks += 1
+            if subtask_nodes and covered_subtasks >= len(subtask_nodes):
+                break
+
+        if len(route) < 2:
+            route = list(preferred_updates[0].get("node_ids") or [])
+            start_s = safe_float(preferred_updates[0].get("start_s"), 0.0)
+
+        points = points_from_route(route, node_pos)
         if len(points) < 2:
             continue
+        assignment_points = points_from_route(assignment_route, node_pos)
+
+        subtask_points: List[Dict[str, Any]] = []
+        for idx, nid in enumerate(subtask_nodes):
+            if nid not in node_pos:
+                continue
+            x, y = node_pos[nid]
+            subtask_points.append(
+                {
+                    "x": x,
+                    "y": y,
+                    "nodeId": nid,
+                    "sequence": idx + 1,
+                }
+            )
+
+        st = first_subtask.get(agv_id)
+        if not subtask_points and isinstance(st, dict):
+            fallback = dict(st)
+            parsed_nid = node_id(fallback.get("nodeId"))
+            if parsed_nid is not None:
+                fallback["nodeId"] = parsed_nid
+                fallback["sequence"] = 1
+                subtask_nodes = [parsed_nid]
+                subtask_points = [fallback]
+
+        first_marker = subtask_points[0] if subtask_points else st
         first_paths[agv_id] = {
             "agv_id": agv_id,
             "start_s": start_s,
@@ -197,7 +404,12 @@ def extract_first_paths(
             "node_ids": [nid for nid in route if nid in node_pos],
             "route_text": short_route_text(route, limit=6),
             "points": points,
-            "first_subtask": st,
+            "assignment_node_ids": [nid for nid in assignment_route if nid in node_pos],
+            "assignment_points": assignment_points,
+            "first_subtask": first_marker,
+            "subtask_nodes": subtask_nodes,
+            "subtask_points": subtask_points,
+            "subtask_count": len(subtask_nodes),
         }
     return first_paths
 
@@ -651,6 +863,7 @@ def build_path_scene(
         return None
     agv_id = str(chosen.get("agv_id", "")).strip()
     node_ids = [node_id(x) for x in chosen.get("node_ids", [])]
+    subtask_nodes = [node_id(x) for x in chosen.get("subtask_nodes", [])]
     items = []
     source_items = filtered[:6] if filtered else candidates[:6]
     for path_info in source_items:
@@ -659,6 +872,7 @@ def build_path_scene(
                 "agv_id": str(path_info.get("agv_id", "")).strip(),
                 "route_text": str(path_info.get("route_text", "")).strip(),
                 "point_count": safe_int(path_info.get("point_count"), 0),
+                "subtask_count": safe_int(path_info.get("subtask_count"), 0),
                 "has_first_path": True,
             }
         )
@@ -668,18 +882,18 @@ def build_path_scene(
         "scene_label": f"Scene {order}",
         "kind": "path_planning",
         "title": "路径规划",
-        "subtitle": "点击 AGV 可高亮首次全局 Path，查看到第一个子任务点的规划结果。",
+        "subtitle": "点击 AGV 可高亮覆盖全部子任务点的全局路径。",
         "start_s": max(0.0, safe_float(chosen.get("start_s"), 0.0) - 0.1),
         "focus": {
             "agv_ids": [agv_id] if agv_id else [],
-            "node_ids": unique_ints(node_ids, limit=10),
+            "node_ids": unique_ints(subtask_nodes + node_ids, limit=12),
             "zoom": 2.5,
             "mode": "path",
         },
         "cards": [
             {
                 "type": "path_result",
-                "title": "首次全局 Path",
+                "title": "全局 Path",
                 "items": items,
             }
         ],
@@ -805,9 +1019,7 @@ def build_bridge_wait_scene(
         if period["start_s"] < 30.0:
             continue
         occ_agvs = period["agv_ids"]
-        # Scan frames during this occupancy period for stopped AGVs in approach zone
-        waiting_agv_id: Optional[str] = None
-        waiting_node: Optional[int] = None
+        waiting_stats: Dict[str, Dict[str, Any]] = {}
         for frame in frames:
             fst = safe_float(frame.get("sim_time_s"), 0.0)
             if fst < period["start_s"] or fst > period["end_s"]:
@@ -822,13 +1034,22 @@ def build_bridge_wait_scene(
                 nid_now = node_id(agv.get("nodeId"))
                 if nid_now is None or nid_now not in approach_zone:
                     continue
-                path_nodes = {node_id(pt.get("nodeId")) for pt in agv.get("path", []) or []}
-                if path_nodes.intersection(preferred_node_values):
-                    waiting_agv_id = aid
-                    waiting_node = nid_now
-                    break
-            if waiting_agv_id:
-                break
+                path_nodes = [node_id(pt.get("nodeId")) for pt in agv.get("path", []) or []]
+                if any(nid in preferred_node_values for nid in path_nodes if nid is not None):
+                    entry = waiting_stats.setdefault(
+                        aid,
+                        {"count": 0, "first_s": fst, "last_s": fst, "node": nid_now},
+                    )
+                    entry["count"] += 1
+                    entry["last_s"] = fst
+                    entry["node"] = nid_now
+        if not waiting_stats:
+            continue
+        waiting_agv_id, waiting_info = max(
+            waiting_stats.items(),
+            key=lambda item: (safe_int(item[1].get("count"), 0), -safe_float(item[1].get("first_s"), 0.0)),
+        )
+        waiting_node = node_id(waiting_info.get("node"))
         if not waiting_agv_id:
             continue
         # Check if the waiting AGV actually enters the bridge after the period
@@ -854,6 +1075,9 @@ def build_bridge_wait_scene(
             "bridge_agv": bridge_agv,
             "waiting_agv": waiting_agv_id,
             "waiting_node": waiting_node,
+            "wait_count": safe_int(waiting_info.get("count"), 0),
+            "wait_start_s": safe_float(waiting_info.get("first_s"), period["start_s"]),
+            "wait_end_s": safe_float(waiting_info.get("last_s"), period["end_s"]),
             "entry_time_s": entry_time_s,
             "gap_s": gap_s,
             "complete": entry_time_s is not None,
@@ -862,9 +1086,16 @@ def build_bridge_wait_scene(
     if not candidates:
         return None
 
-    # Prefer complete cycles; among those, pick the tightest gap
-    complete = [c for c in candidates if c["complete"]]
-    chosen = min(complete, key=lambda c: c["gap_s"]) if complete else candidates[0]
+    # Prefer complete wait->clear->enter cycles with the clearest waiting evidence.
+    chosen = max(
+        candidates,
+        key=lambda c: (
+            1 if c.get("complete") else 0,
+            safe_int(c.get("wait_count"), 0),
+            safe_float(c.get("period_end"), 0.0) - safe_float(c.get("period_start"), 0.0),
+            -safe_float(c.get("gap_s"), 999.0),
+        ),
+    )
 
     bridge_agv = chosen["bridge_agv"]
     waiting_agv = chosen["waiting_agv"]
@@ -873,16 +1104,16 @@ def build_bridge_wait_scene(
     end_s = (entry_time_s + 5.0) if entry_time_s else (chosen["period_end"] + 10.0)
 
     subtitle = (
-        f"{waiting_agv} 在桥外等待，{bridge_agv} 离开桥区后放行进入。"
+        f"{bridge_agv} 与 {waiting_agv} 在桥两端形成对向占道，{waiting_agv} 等待后被放行进入。"
         if entry_time_s is not None
-        else f"{waiting_agv} 在桥外等待，前方桥区仍被 {bridge_agv} 占用。"
+        else f"{bridge_agv} 占用桥区，{waiting_agv} 在对向入口等待让行。"
     )
     return {
         "scene_id": "scene_bridge",
         "order": order,
         "scene_label": f"Scene {order}",
         "kind": "bridge",
-        "title": "桥场景",
+        "title": "桥上对向冲突",
         "subtitle": subtitle,
         "start_s": start_s,
         "end_s": end_s,
@@ -896,9 +1127,13 @@ def build_bridge_wait_scene(
         "cards": [
             {
                 "type": "bridge_summary",
-                "title": "桥区通行管理",
+                "title": "桥上让行",
                 "agv_id": bridge_agv,
-                "route_text": f"{bridge_agv} 在桥内，{waiting_agv} 等待进入",
+                "route_text": (
+                    f"{bridge_agv} 先占桥，{waiting_agv} 对向等待后进入"
+                    if entry_time_s is not None
+                    else f"{bridge_agv} 先占桥，{waiting_agv} 对向等待"
+                ),
                 "bridge_nodes": sorted(preferred_node_values),
                 "has_first_path": True,
             }
@@ -1308,6 +1543,7 @@ def build_scenes(
 ) -> List[Dict[str, Any]]:
     total_sim_s = safe_float(frames[-1].get("sim_time_s"), 0.0) if frames else 0.0
     bridge_node_set = {int(x) for x in map_json.get("bridgeNodeIds", []) or [] if node_id(x) is not None}
+    longest_bridge_nodes = longest_bridge_component(map_json)
     task_aliases = build_task_aliases(raw_events)
     task_events = [raw for raw in raw_events if str(raw.get("kind", "")).strip() == "tasks_published"]
     assignment_events = [
@@ -1357,10 +1593,21 @@ def build_scenes(
         scene_2["end_s"] = 18.0
         scene_2["playback_rate"] = 1.0
 
-    # Scene 3: bridge scene — prefer wait cycle, fall back to simple bridge traversal
-    scene_bridge = build_bridge_wait_scene(order=3, frames=frames, bridge_node_set=bridge_node_set, preferred_nodes={574, 575, 576, 577, 578, 579, 580}, map_edges=map_json.get("edges", []))
+    # Scene 3: longest bridge scene — prefer a real wait->yield->entry cycle, fall back to simple traversal.
+    scene_bridge = build_bridge_wait_scene(
+        order=3,
+        frames=frames,
+        bridge_node_set=bridge_node_set,
+        preferred_nodes=longest_bridge_nodes,
+        map_edges=map_json.get("edges", []),
+    )
     if scene_bridge is None:
-        scene_bridge = build_bridge_scene(order=3, first_paths=first_paths, bridge_node_set={574, 575, 576, 577, 578, 579, 580}, after_s=30.0)
+        scene_bridge = build_bridge_scene(
+            order=3,
+            first_paths=first_paths,
+            bridge_node_set=longest_bridge_nodes or bridge_node_set,
+            after_s=30.0,
+        )
     if scene_bridge is not None:
         scene_bridge["playback_rate"] = 1.0
 
