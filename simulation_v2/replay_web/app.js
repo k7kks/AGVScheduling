@@ -292,40 +292,12 @@ function focusDescriptor(frame, event) {
   const agvIds = new Set();
   const nodeIds = new Set();
   const rawFocus = event?.focus || scene?.focus || {};
-  for (const agvId of rawFocus.agv_ids || []) {
-    const value = String(agvId || "").trim();
-    if (value) agvIds.add(value);
-  }
-  for (const nodeId of rawFocus.node_ids || []) {
-    const parsed = parseNodeId(nodeId);
-    if (parsed !== null) nodeIds.add(parsed);
-  }
 
   if (replay.followAgvId) {
     agvIds.add(replay.followAgvId);
-    const followAgv = frame.agvs.find((item) => String(item.id) === replay.followAgvId);
-    const followNodes = [
-      parseNodeId(followAgv?.nodeId),
-      parseNodeId(followAgv?.nextNodeId),
-      parseNodeId(followAgv?.nextSubtask?.nodeId),
-    ];
     const firstPath = replay.firstPaths?.[replay.followAgvId];
-    if (firstPath && Array.isArray(firstPath.node_ids)) {
-      for (const value of firstPath.node_ids.slice(0, 16)) {
-        const parsed = parseNodeId(value);
-        if (parsed !== null) followNodes.push(parsed);
-      }
-    }
-    for (const nodeId of followNodes) {
-      if (nodeId !== null) nodeIds.add(nodeId);
-    }
-  }
-
-  if (!agvIds.size && !nodeIds.size) {
-    const assigned = frame.agvs
-      .filter((agv) => agv.assigned || Number(agv.speed || 0) > 1e-6)
-      .slice(0, 2);
-    for (const agv of assigned) agvIds.add(String(agv.id));
+    const subtaskNodeId = firstPath ? parseNodeId(firstPath.first_subtask?.nodeId) : null;
+    if (subtaskNodeId !== null) nodeIds.add(subtaskNodeId);
   }
 
   return {
@@ -567,11 +539,10 @@ function drawBridges(ctx, transform) {
 }
 
 function drawBackdrop(ctx, canvas, focus, event) {
-  const active = replay.highlightFocus && (Boolean(event) || Boolean(replay.followAgvId));
+  const active = replay.highlightFocus && Boolean(replay.followAgvId);
   if (!active) return;
-  const alpha = event ? 0.16 : 0.1;
   ctx.save();
-  ctx.fillStyle = `rgba(3, 8, 16, ${alpha})`;
+  ctx.fillStyle = "rgba(3, 8, 16, 0.1)";
   ctx.fillRect(0, 0, canvas.clientWidth, canvas.clientHeight);
   ctx.restore();
 }
@@ -713,7 +684,7 @@ function drawSelectedFirstPath(ctx, transform) {
 
 function drawAgvs(ctx, transform, frame, focus, event) {
   const mode = replay.displayMode;
-  const hasEmphasis = replay.highlightFocus && (Boolean(event) || Boolean(replay.followAgvId));
+  const hasEmphasis = replay.highlightFocus && Boolean(replay.followAgvId);
   const pulse = 0.5 + 0.5 * Math.sin(replay.currentTimeS * 7.2);
   for (let i = 0; i < frame.agvs.length; i += 1) {
     const agv = frame.agvs[i];
