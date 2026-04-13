@@ -138,45 +138,88 @@ def route_intersects_bridge(node_ids: List[Any], bridge_node_set: set[int]) -> b
     return False
 
 
-def extract_first_paths(frames: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    first_paths: Dict[str, Dict[str, Any]] = {}
+def extract_first_paths(
+    frames: List[Dict[str, Any]],
+    raw_events: List[Dict[str, Any]],
+    map_json: Dict[str, Any],
+) -> Dict[str, Dict[str, Any]]:
+    # Build node position lookup from map
+    node_pos: Dict[int, Tuple[float, float]] = {}
+    for n in map_json.get("nodes", []):
+        nid = node_id(n.get("id"))
+        if nid is not None:
+            node_pos[nid] = (safe_float(n.get("x"), 0.0), safe_float(n.get("y"), 0.0))
+
+    # Reconstruct full routes from trail_update events
+    trail_routes: Dict[str, List[int]] = {}  # agv_id -> ordered node list
+    trail_updates = [
+        e for e in raw_events
+        if str(e.get("kind", "")).strip() == "trail_update"
+        and isinstance(e.get("node_ids"), list)
+    ]
+    for tu in trail_updates:
+        agv_id = str(tu.get("device_id", "")).strip()
+        if not agv_id:
+            continue
+        nids = tu.get("node_ids", [])
+        if agv_id not in trail_routes:
+            trail_routes[agv_id] = []
+        route = trail_routes[agv_id]
+        for raw_nid in nids:
+            nid = node_id(raw_nid)
+            if nid is None:
+                continue
+            if not route or route[-1] != nid:
+                route.append(nid)
+
+    # Capture first subtask and start time from frames
+    first_subtask: Dict[str, Optional[Dict[str, Any]]] = {}
+    first_start_s: Dict[str, float] = {}
     for frame in frames:
         sim_time_s = safe_float(frame.get("sim_time_s"), 0.0)
         for agv in frame.get("agvs", []) or []:
             if not isinstance(agv, dict):
                 continue
             agv_id = str(agv.get("id", "")).strip()
-            if not agv_id or agv_id in first_paths:
+            if not agv_id or agv_id in first_subtask:
                 continue
             raw_points = agv.get("path")
             if not isinstance(raw_points, list) or len(raw_points) < 2:
                 continue
-            points: List[Dict[str, Any]] = []
-            node_ids: List[int] = []
-            for point in raw_points:
-                if not isinstance(point, dict):
-                    continue
-                nid = node_id(point.get("nodeId"))
-                if nid is not None:
-                    node_ids.append(nid)
-                points.append(
-                    {
-                        "x": safe_float(point.get("x"), 0.0),
-                        "y": safe_float(point.get("y"), 0.0),
-                        "nodeId": nid,
-                    }
-                )
-            if len(points) < 2:
-                continue
-            first_paths[agv_id] = {
-                "agv_id": agv_id,
-                "start_s": sim_time_s,
-                "point_count": len(points),
-                "node_ids": node_ids,
-                "route_text": short_route_text(node_ids, limit=6),
-                "points": points,
-                "first_subtask": dict(agv.get("nextSubtask") or {}) if isinstance(agv.get("nextSubtask"), dict) else None,
-            }
+            first_start_s[agv_id] = sim_time_s
+            st = agv.get("nextSubtask")
+            first_subtask[agv_id] = dict(st) if isinstance(st, dict) else None
+
+    # Build first_paths from trail routes + map positions
+    first_paths: Dict[str, Dict[str, Any]] = {}
+    for agv_id, route in trail_routes.items():
+        if len(route) < 2:
+            continue
+        # Truncate route at first subtask to avoid storing entire sim route
+        st = first_subtask.get(agv_id)
+        st_nid = node_id(st.get("nodeId")) if isinstance(st, dict) else None
+        if st_nid is not None and st_nid in route:
+            cut = route.index(st_nid)
+            route = route[: cut + 1]
+        else:
+            # No subtask match: keep first 120 nodes as reasonable initial path
+            route = route[:120]
+        points: List[Dict[str, Any]] = []
+        for nid in route:
+            if nid in node_pos:
+                x, y = node_pos[nid]
+                points.append({"x": x, "y": y, "nodeId": nid})
+        if len(points) < 2:
+            continue
+        first_paths[agv_id] = {
+            "agv_id": agv_id,
+            "start_s": first_start_s.get(agv_id, 0.0),
+            "point_count": len(points),
+            "node_ids": [nid for nid in route if nid in node_pos],
+            "route_text": short_route_text(route, limit=6),
+            "points": points,
+            "first_subtask": st,
+        }
     return first_paths
 
 
@@ -1433,7 +1476,7 @@ def build_bundle(session_dir: Path, *, bundle_name: str = "leader_demo_bundle.js
     raw_events.sort(key=lambda x: safe_float(x.get("sim_time_s"), 0.0))
     bridge_node_set = {int(x) for x in map_json.get("bridgeNodeIds", []) or [] if node_id(x) is not None}
     timeline = build_timeline(raw_events, frames, bridge_node_set)
-    first_paths = extract_first_paths(frames)
+    first_paths = extract_first_paths(frames, raw_events, map_json)
 
     # Enrich first_paths with all subtask (pickup/delivery) node IDs from assignments
     assignment_events = [
@@ -1468,6 +1511,17 @@ def build_bundle(session_dir: Path, *, bundle_name: str = "leader_demo_bundle.js
 
     scenes = build_scenes(raw_events, frames, timeline, map_json, first_paths)
     summary = build_summary(session_json, frames, raw_events, timeline, scenes)
+
+    # Slim down frames for bundle: remove per-frame path arrays (large, unused by UI)
+    # and sample every 2nd frame for sessions with >500 frames
+    slim_fields = {"path", "subtasks", "nextSubtask"}
+    for frame in frames:
+        for agv in frame.get("agvs", []):
+            for field in slim_fields:
+                agv.pop(field, None)
+    if len(frames) > 500:
+        frames = frames[::2]
+
     bundle = {
         "metadata": {
             **session_json,
@@ -1512,7 +1566,18 @@ class ReplayServer:
                 if not path.exists() or not path.is_file():
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
-                self._send_bytes(path.read_bytes(), content_type)
+                file_size = path.stat().st_size
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(file_size))
+                self.end_headers()
+                with open(path, "rb") as fh:
+                    while True:
+                        chunk = fh.read(1 << 20)  # 1 MB chunks
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
 
             def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
                 return

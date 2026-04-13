@@ -47,7 +47,7 @@ const replay = {
   firstPaths: {},
   summary: null,
   totalTimeS: 0,
-  directorBaseRate: 2.8,
+  directorBaseRate: 1.5,
   currentTimeS: 0,
   playing: true,
   globalSpeed: 1.0,
@@ -298,6 +298,19 @@ function focusDescriptor(frame, event) {
     const firstPath = replay.firstPaths?.[replay.followAgvId];
     const subtaskNodeId = firstPath ? parseNodeId(firstPath.first_subtask?.nodeId) : null;
     if (subtaskNodeId !== null) nodeIds.add(subtaskNodeId);
+  } else if (Array.isArray(rawFocus.agv_ids)) {
+    // No explicitly followed AGV — use scene/event focus AGVs
+    for (const id of rawFocus.agv_ids) {
+      const s = String(id || "").trim();
+      if (s) agvIds.add(s);
+    }
+  }
+
+  if (Array.isArray(rawFocus.node_ids)) {
+    for (const nid of rawFocus.node_ids) {
+      const parsed = parseNodeId(nid);
+      if (parsed !== null) nodeIds.add(parsed);
+    }
   }
 
   return {
@@ -635,89 +648,101 @@ function drawSubtaskMarker(ctx, transform, pt, label) {
 }
 
 function drawSelectedFirstPath(ctx, transform) {
-  const agvId = String(replay.followAgvId || "").trim();
-  if (!agvId) return;
-  const pathInfo = replay.firstPaths?.[agvId];
-  if (!pathInfo || !Array.isArray(pathInfo.points) || pathInfo.points.length < 2) return;
-
   const scene = currentScene();
+  const focus = focusDescriptor(currentFrame(), currentEvent());
+  
+  // Collect AGV IDs to draw paths for
+  const agvIds = new Set();
+  if (replay.followAgvId) agvIds.add(String(replay.followAgvId));
+  for (const id of focus.agvIds) agvIds.add(String(id));
+  
+  if (agvIds.size === 0) return;
+
   const isAssignment = scene && String(scene.kind || "").includes("assignment");
-  const subtask = pathInfo.first_subtask;
-  const subtaskNodeId = subtask ? parseNodeId(subtask.nodeId) : null;
-  const subtaskNodes = Array.isArray(pathInfo.subtask_nodes) ? pathInfo.subtask_nodes : [];
+  const pathColors = ["#0891b2", "#e85d04", "#7b2cbf", "#2d6a4f"];
+  let colorIdx = 0;
 
-  // Assignment scene: truncate at first subtask; others: show full path
-  let displayPoints = pathInfo.points;
-  if (isAssignment && subtaskNodeId !== null) {
-    for (let i = 0; i < pathInfo.points.length; i += 1) {
-      if (parseNodeId(pathInfo.points[i].nodeId) === subtaskNodeId) {
-        displayPoints = pathInfo.points.slice(0, i + 1);
-        break;
+  for (const agvId of agvIds) {
+    const pathInfo = replay.firstPaths?.[agvId];
+    if (!pathInfo || !Array.isArray(pathInfo.points) || pathInfo.points.length < 2) continue;
+
+    const subtask = pathInfo.first_subtask;
+    const subtaskNodeId = subtask ? parseNodeId(subtask.nodeId) : null;
+    const subtaskNodes = Array.isArray(pathInfo.subtask_nodes) ? pathInfo.subtask_nodes : [];
+    const lineColor = pathColors[colorIdx % pathColors.length];
+    colorIdx += 1;
+
+    // Assignment scene: truncate at first subtask; others: show full path
+    let displayPoints = pathInfo.points;
+    if (isAssignment && subtaskNodeId !== null) {
+      for (let i = 0; i < pathInfo.points.length; i += 1) {
+        if (parseNodeId(pathInfo.points[i].nodeId) === subtaskNodeId) {
+          displayPoints = pathInfo.points.slice(0, i + 1);
+          break;
+        }
       }
     }
-  }
-  if (displayPoints.length < 2) return;
-  ctx.save();
-  ctx.shadowColor = "rgba(8, 145, 178, 0.45)";
-  ctx.shadowBlur = 18;
-  drawPolyline(ctx, transform, displayPoints, {
-    color: "#0891b2",
-    width: 6.2,
-    alpha: 0.98,
-  });
-  const first = displayPoints[0];
-  const second = displayPoints[Math.min(displayPoints.length - 1, 1)];
-  if (first) {
-    const p = transform.toCanvas(first.x, first.y);
-    ctx.beginPath();
-    ctx.arc(p.cx, p.cy, 7, 0, Math.PI * 2);
-    ctx.fillStyle = "#67e8f9";
-    ctx.fill();
-  }
+    if (displayPoints.length < 2) continue;
 
-  // Highlight subtask node(s) along the displayed path
-  if (isAssignment) {
-    // Assignment: only first subtask point
-    if (subtask && Number.isFinite(Number(subtask.x)) && Number.isFinite(Number(subtask.y))) {
-      drawSubtaskMarker(ctx, transform, subtask, "首个子任务点");
+    ctx.save();
+    ctx.shadowColor = `${lineColor}73`;
+    ctx.shadowBlur = 18;
+    drawPolyline(ctx, transform, displayPoints, {
+      color: lineColor,
+      width: 6.2,
+      alpha: 0.98,
+    });
+    const first = displayPoints[0];
+    const second = displayPoints[Math.min(displayPoints.length - 1, 1)];
+    if (first) {
+      const p = transform.toCanvas(first.x, first.y);
+      ctx.beginPath();
+      ctx.arc(p.cx, p.cy, 7, 0, Math.PI * 2);
+      ctx.fillStyle = "#67e8f9";
+      ctx.fill();
     }
-  } else {
-    // Other scenes: highlight all subtask nodes found along the path
-    const subtaskSet = new Set(subtaskNodes.map(n => Number(n)));
-    if (subtaskNodeId !== null) subtaskSet.add(subtaskNodeId);
-    let labelIdx = 0;
-    for (const pt of displayPoints) {
-      const nid = parseNodeId(pt.nodeId);
-      if (nid !== null && subtaskSet.has(nid)) {
-        labelIdx += 1;
-        drawSubtaskMarker(ctx, transform, pt, `子任务点 ${labelIdx}`);
+
+    // Highlight subtask node(s) along the displayed path
+    if (isAssignment) {
+      if (subtask && Number.isFinite(Number(subtask.x)) && Number.isFinite(Number(subtask.y))) {
+        drawSubtaskMarker(ctx, transform, subtask, `${agvId} 首个子任务点`);
+      }
+    } else {
+      const subtaskSet = new Set(subtaskNodes.map(n => Number(n)));
+      if (subtaskNodeId !== null) subtaskSet.add(subtaskNodeId);
+      let labelIdx = 0;
+      for (const pt of displayPoints) {
+        const nid = parseNodeId(pt.nodeId);
+        if (nid !== null && subtaskSet.has(nid)) {
+          labelIdx += 1;
+          drawSubtaskMarker(ctx, transform, pt, `${agvId} 子任务点 ${labelIdx}`);
+        }
+      }
+      if (labelIdx === 0 && subtask && Number.isFinite(Number(subtask.x)) && Number.isFinite(Number(subtask.y))) {
+        drawSubtaskMarker(ctx, transform, subtask, `${agvId} 子任务点`);
       }
     }
-    // Fallback: if no subtask_nodes data, at least show first subtask
-    if (labelIdx === 0 && subtask && Number.isFinite(Number(subtask.x)) && Number.isFinite(Number(subtask.y))) {
-      drawSubtaskMarker(ctx, transform, subtask, "子任务点");
+    if (first && second) {
+      const p0 = transform.toCanvas(first.x, first.y);
+      const p1 = transform.toCanvas(second.x, second.y);
+      const angle = Math.atan2(p1.cy - p0.cy, p1.cx - p0.cx);
+      ctx.translate(p1.cx, p1.cy);
+      ctx.rotate(angle);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(-11, -5);
+      ctx.lineTo(-11, 5);
+      ctx.closePath();
+      ctx.fillStyle = lineColor;
+      ctx.fill();
     }
+    ctx.restore();
   }
-  if (first && second) {
-    const p0 = transform.toCanvas(first.x, first.y);
-    const p1 = transform.toCanvas(second.x, second.y);
-    const angle = Math.atan2(p1.cy - p0.cy, p1.cx - p0.cx);
-    ctx.translate(p1.cx, p1.cy);
-    ctx.rotate(angle);
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(-11, -5);
-    ctx.lineTo(-11, 5);
-    ctx.closePath();
-    ctx.fillStyle = "#0891b2";
-    ctx.fill();
-  }
-  ctx.restore();
 }
 
 function drawAgvs(ctx, transform, frame, focus, event) {
   const mode = replay.displayMode;
-  const hasEmphasis = replay.highlightFocus && Boolean(replay.followAgvId);
+  const hasEmphasis = replay.highlightFocus && (Boolean(replay.followAgvId) || focus.agvIds.length > 0);
   const pulse = 0.5 + 0.5 * Math.sin(replay.currentTimeS * 7.2);
   for (let i = 0; i < frame.agvs.length; i += 1) {
     const agv = frame.agvs[i];
@@ -1280,18 +1305,54 @@ function render(options = {}) {
   document.getElementById("time-label").textContent = `${formatTime(replay.currentTimeS)} / ${formatTime(replay.totalTimeS)}`;
 }
 
+function nextSceneAfter(timeS) {
+  if (!Array.isArray(replay.scenes)) return null;
+  for (const scene of replay.scenes) {
+    if (Number(scene.start_s || 0) > timeS + 0.5) return scene;
+  }
+  return null;
+}
+
 function tick(ts) {
   if (!replay.lastTickTs) replay.lastTickTs = ts;
-  const dt = Math.max(0, (ts - replay.lastTickTs) / 1000);
+  const dt = Math.min(0.1, Math.max(0, (ts - replay.lastTickTs) / 1000));
   replay.lastTickTs = ts;
   if (replay.playing && replay.frames.length) {
-    replay.currentTimeS += dt * effectiveSpeed();
+    const speed = effectiveSpeed();
+    const prevSceneId = currentScene()?.scene_id || "";
+    replay.currentTimeS += dt * speed;
+
+    // Auto-director: skip gaps between scenes (jump to next scene start)
+    let jumped = false;
+    if (replay.autoDirector) {
+      const scene = currentSceneAt(replay.currentTimeS);
+      if (!scene) {
+        const next = nextSceneAfter(replay.currentTimeS);
+        if (next) {
+          const nextStart = Number(next.start_s || 0);
+          const gap = nextStart - replay.currentTimeS;
+          if (gap > 2.0) {
+            replay.currentTimeS = nextStart - 1.0;
+            jumped = true;
+          }
+        }
+      }
+    }
+
     if (replay.currentTimeS >= replay.totalTimeS) {
       replay.currentTimeS = replay.totalTimeS;
       replay.playing = false;
       refreshButtons();
     }
-    render();
+
+    // Snap camera when entering a new scene
+    const newSceneId = currentScene()?.scene_id || "";
+    const sceneChanged = newSceneId && newSceneId !== prevSceneId;
+    if (sceneChanged || jumped) {
+      render({ autoSnap: true, forceEventList: true });
+    } else {
+      render();
+    }
   }
   requestAnimationFrame(tick);
 }
