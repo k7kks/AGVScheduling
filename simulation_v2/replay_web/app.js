@@ -412,7 +412,8 @@ function allAgvIds() {
 
 function focusDescriptor(frame, event) {
   const scene = currentScene();
-  const isAssignment = scene && String(scene.kind || "").includes("assignment");
+  const sceneKind = String(scene?.kind || "");
+  const isAssignment = sceneKind.includes("assignment");
   const agvIds = new Set();
   const nodeIds = new Set();
   const rawFocus = event?.focus || scene?.focus || {};
@@ -422,16 +423,18 @@ function focusDescriptor(frame, event) {
     const firstPath = replay.firstPaths?.[replay.followAgvId];
     const markers = subtaskMarkersForPath(firstPath);
     if (isAssignment) {
+      // Assignment & idle-assignment: only show first subtask node
       const firstMarker = markers[0];
       const subtaskNodeId = firstMarker ? parseNodeId(firstMarker.nodeId) : null;
       if (subtaskNodeId !== null) nodeIds.add(subtaskNodeId);
     } else {
+      // Path planning and others: show all subtask nodes
       for (const marker of markers) {
         const subtaskNodeId = parseNodeId(marker.nodeId);
         if (subtaskNodeId !== null) nodeIds.add(subtaskNodeId);
       }
     }
-  } else if (Array.isArray(rawFocus.agv_ids)) {
+  } else if (Array.isArray(rawFocus.agv_ids) && rawFocus.agv_ids.length > 0) {
     // No explicitly followed AGV — use scene/event focus AGVs
     for (const id of rawFocus.agv_ids) {
       const s = String(id || "").trim();
@@ -439,7 +442,8 @@ function focusDescriptor(frame, event) {
     }
   }
 
-  if (Array.isArray(rawFocus.node_ids)) {
+  // Only include scene node_ids for bridge/conflict scenes (not assignment/path scenes)
+  if (Array.isArray(rawFocus.node_ids) && (sceneKind === "bridge" || sceneKind.includes("conflict"))) {
     for (const nid of rawFocus.node_ids) {
       const parsed = parseNodeId(nid);
       if (parsed !== null) nodeIds.add(parsed);
@@ -694,10 +698,10 @@ function drawBridges(ctx, transform) {
 }
 
 function drawBackdrop(ctx, canvas, focus, event) {
-  const active = replay.highlightFocus && Boolean(replay.followAgvId);
+  const active = replay.highlightFocus && focus.agvIds.length > 0;
   if (!active) return;
   ctx.save();
-  ctx.fillStyle = "rgba(3, 8, 16, 0.1)";
+  ctx.fillStyle = "rgba(3, 8, 16, 0.12)";
   ctx.fillRect(0, 0, canvas.clientWidth, canvas.clientHeight);
   ctx.restore();
 }
@@ -724,6 +728,12 @@ function drawPolyline(ctx, transform, points, style) {
 
 function drawReserved(ctx, transform, frame, focus) {
   if (!replay.showReserved) return;
+  const scene = currentScene();
+  const sceneKind = String(scene?.kind || "");
+  // In bridge/conflict scenes, suppress volatile reserved-node rendering to avoid flicker
+  if ((sceneKind === "bridge" || sceneKind.includes("conflict")) && !replay.followAgvId) {
+    return;
+  }
   const hasEmphasis = replay.highlightFocus && (focus.agvIds.length || focus.nodeIds.length);
   ctx.save();
   for (const item of frame.reserved_nodes || []) {
@@ -793,121 +803,110 @@ function drawSubtaskMarker(ctx, transform, pt, label) {
 
 function drawSelectedFirstPath(ctx, transform, frame, event) {
   const scene = currentScene();
+  const sceneKind = String(scene?.kind || "");
   const focus = focusDescriptor(frame, event);
   
-  // Only draw paths when user explicitly selected an AGV
-  // or for conflict/bridge scenes (≤2 AGVs where paths are informative)
-  const agvIds = new Set();
-  if (replay.followAgvId) {
-    agvIds.add(String(replay.followAgvId));
+  // Bridge/conflict scenes: no path drawing — AGV highlighting suffices
+  if ((sceneKind === "bridge" || sceneKind.includes("conflict")) && !replay.followAgvId) {
+    return;
+  }
+
+  // Only draw paths for explicitly clicked AGV
+  if (!replay.followAgvId) return;
+  const agvId = String(replay.followAgvId);
+
+  const isAssignment = sceneKind.includes("assignment");
+  const pathInfo = replay.firstPaths?.[agvId];
+  if (!pathInfo || !Array.isArray(pathInfo.points) || pathInfo.points.length < 2) return;
+
+  const subtaskMarkers = subtaskMarkersForPath(pathInfo);
+  const subtaskNodes = Array.isArray(pathInfo.subtask_nodes) ? pathInfo.subtask_nodes : [];
+  const lineColor = "#0891b2";
+
+  // Assignment/idle scenes: show first segment only; path planning: show full route
+  let displayPoints = isAssignment
+    ? (Array.isArray(pathInfo.assignment_points) ? pathInfo.assignment_points : [])
+    : pathInfo.points;
+  if (displayPoints.length < 2) return;
+
+  ctx.save();
+  ctx.shadowColor = `${lineColor}73`;
+  ctx.shadowBlur = 18;
+  drawPolyline(ctx, transform, displayPoints, {
+    color: lineColor,
+    width: 6.2,
+    alpha: 0.98,
+  });
+
+  // Start point marker
+  const first = displayPoints[0];
+  const second = displayPoints[Math.min(displayPoints.length - 1, 1)];
+  if (first) {
+    const p = transform.toCanvas(first.x, first.y);
+    ctx.beginPath();
+    ctx.arc(p.cx, p.cy, 7, 0, Math.PI * 2);
+    ctx.fillStyle = "#67e8f9";
+    ctx.fill();
+  }
+
+  // Subtask point markers
+  if (isAssignment) {
+    const firstMarker = subtaskMarkers[0];
+    if (firstMarker) {
+      drawSubtaskMarker(ctx, transform, firstMarker, `${agvId} 首个子任务点`);
+    }
+  } else if (subtaskMarkers.length > 0) {
+    for (let i = 0; i < subtaskMarkers.length; i += 1) {
+      const marker = subtaskMarkers[i];
+      const labelIdx = Number(marker.sequence) > 0 ? Number(marker.sequence) : i + 1;
+      drawSubtaskMarker(ctx, transform, marker, `${agvId} 子任务点 ${labelIdx}`);
+    }
   } else {
-    const kind = String(scene?.kind || "");
-    const isMultiAgvScene = kind.includes("conflict") || kind === "bridge";
-    if (isMultiAgvScene) {
-      for (const id of focus.agvIds) agvIds.add(String(id));
+    const subtaskSet = new Set(subtaskNodes.map(n => Number(n)));
+    const subtaskNodeId = pathInfo.first_subtask ? parseNodeId(pathInfo.first_subtask.nodeId) : null;
+    if (subtaskNodeId !== null) subtaskSet.add(subtaskNodeId);
+    let labelIdx = 0;
+    for (const pt of displayPoints) {
+      const nid = parseNodeId(pt.nodeId);
+      if (nid !== null && subtaskSet.has(nid)) {
+        labelIdx += 1;
+        drawSubtaskMarker(ctx, transform, pt, `${agvId} 子任务点 ${labelIdx}`);
+      }
+    }
+    if (labelIdx === 0 && pathInfo.first_subtask && Number.isFinite(Number(pathInfo.first_subtask.x))) {
+      drawSubtaskMarker(ctx, transform, pathInfo.first_subtask, `${agvId} 子任务点`);
     }
   }
-  
-  if (agvIds.size === 0) return;
 
-  const isAssignment = scene && String(scene.kind || "").includes("assignment");
-  const pathColors = ["#0891b2", "#e85d04", "#7b2cbf", "#2d6a4f"];
-  let colorIdx = 0;
-
-  for (const agvId of agvIds) {
-    const pathInfo = replay.firstPaths?.[agvId];
-    if (!pathInfo || !Array.isArray(pathInfo.points) || pathInfo.points.length < 2) continue;
-
-    const subtask = pathInfo.first_subtask;
-    const subtaskNodeId = subtask ? parseNodeId(subtask.nodeId) : null;
-    const subtaskNodes = Array.isArray(pathInfo.subtask_nodes) ? pathInfo.subtask_nodes : [];
-    const subtaskMarkers = subtaskMarkersForPath(pathInfo);
-    const lineColor = pathColors[colorIdx % pathColors.length];
-    colorIdx += 1;
-
-    // Assignment scene uses the raw first segment from PathResponse; other scenes show the full route.
-    let displayPoints = isAssignment
-      ? (Array.isArray(pathInfo.assignment_points) ? pathInfo.assignment_points : [])
-      : pathInfo.points;
-    if (displayPoints.length < 2) continue;
-
-    ctx.save();
-    ctx.shadowColor = `${lineColor}73`;
-    ctx.shadowBlur = 18;
-    drawPolyline(ctx, transform, displayPoints, {
-      color: lineColor,
-      width: 6.2,
-      alpha: 0.98,
-    });
-    const first = displayPoints[0];
-    const second = displayPoints[Math.min(displayPoints.length - 1, 1)];
-    if (first) {
-      const p = transform.toCanvas(first.x, first.y);
-      ctx.beginPath();
-      ctx.arc(p.cx, p.cy, 7, 0, Math.PI * 2);
-      ctx.fillStyle = "#67e8f9";
-      ctx.fill();
-    }
-
-    // Highlight the selected AGV's subtask points according to the current scene.
-    if (isAssignment) {
-      const firstMarker = subtaskMarkers[0];
-      if (firstMarker) {
-        drawSubtaskMarker(ctx, transform, firstMarker, `${agvId} 首个子任务点`);
-      }
-    } else if (subtaskMarkers.length > 0) {
-      for (let i = 0; i < subtaskMarkers.length; i += 1) {
-        const marker = subtaskMarkers[i];
-        const labelIdx = Number(marker.sequence) > 0 ? Number(marker.sequence) : i + 1;
-        drawSubtaskMarker(ctx, transform, marker, `${agvId} 子任务点 ${labelIdx}`);
-      }
-    } else {
-      const subtaskSet = new Set(subtaskNodes.map(n => Number(n)));
-      if (subtaskNodeId !== null) subtaskSet.add(subtaskNodeId);
-      let labelIdx = 0;
-      for (const pt of displayPoints) {
-        const nid = parseNodeId(pt.nodeId);
-        if (nid !== null && subtaskSet.has(nid)) {
-          labelIdx += 1;
-          drawSubtaskMarker(ctx, transform, pt, `${agvId} 子任务点 ${labelIdx}`);
-        }
-      }
-      if (labelIdx === 0 && subtask && Number.isFinite(Number(subtask.x)) && Number.isFinite(Number(subtask.y))) {
-        drawSubtaskMarker(ctx, transform, subtask, `${agvId} 子任务点`);
-      }
-    }
-    if (first && second) {
-      const p0 = transform.toCanvas(first.x, first.y);
-      const p1 = transform.toCanvas(second.x, second.y);
-      const angle = Math.atan2(p1.cy - p0.cy, p1.cx - p0.cx);
-      ctx.translate(p1.cx, p1.cy);
-      ctx.rotate(angle);
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.lineTo(-11, -5);
-      ctx.lineTo(-11, 5);
-      ctx.closePath();
-      ctx.fillStyle = lineColor;
-      ctx.fill();
-    }
-    ctx.restore();
+  // Direction arrow
+  if (first && second) {
+    const p0 = transform.toCanvas(first.x, first.y);
+    const p1 = transform.toCanvas(second.x, second.y);
+    const angle = Math.atan2(p1.cy - p0.cy, p1.cx - p0.cx);
+    ctx.translate(p1.cx, p1.cy);
+    ctx.rotate(angle);
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(-11, -5);
+    ctx.lineTo(-11, 5);
+    ctx.closePath();
+    ctx.fillStyle = lineColor;
+    ctx.fill();
   }
+  ctx.restore();
 }
 
 function drawAgvs(ctx, transform, frame, focus, event) {
   const mode = replay.displayMode;
-  const scene = currentScene();
-  const sceneKind = String(scene?.kind || "");
-  const isSceneWithFocus = (sceneKind.includes("conflict") || sceneKind === "bridge") && focus.agvIds.length > 0;
-  const hasEmphasis = replay.highlightFocus && (Boolean(replay.followAgvId) || isSceneWithFocus);
+  // Dim non-focus AGVs whenever there is ANY focus set (explicit click or scene auto-focus)
+  const hasEmphasis = replay.highlightFocus && focus.agvIds.length > 0;
   const pulse = 0.5 + 0.5 * Math.sin(replay.currentTimeS * 7.2);
   for (let i = 0; i < frame.agvs.length; i += 1) {
     const agv = frame.agvs[i];
     const color = routeColor(i);
     const isFocus = focus.agvIds.includes(String(agv.id));
-    const dimFactor = hasEmphasis && !isFocus ? 0.28 : 1;
+    const dimFactor = hasEmphasis && !isFocus ? 0.18 : 1;
 
-    const isFollowed = String(agv.id) === String(replay.followAgvId);
     if (mode !== "path") {
       drawPolyline(ctx, transform, agv.trail || [], {
         color,
@@ -920,54 +919,59 @@ function drawAgvs(ctx, transform, frame, focus, event) {
     const p = transform.toCanvas(agv.x, agv.y);
     const bodyColor = speedColor(Number(agv.speed || 0));
 
+    // Glow halo for focus AGVs
     ctx.save();
-    ctx.globalAlpha = (isFocus ? 0.4 : 0.18) * dimFactor;
+    ctx.globalAlpha = (isFocus ? 0.45 : 0.14) * dimFactor;
     ctx.beginPath();
-    ctx.arc(p.cx, p.cy, isFocus ? 22 : 16, 0, Math.PI * 2);
+    ctx.arc(p.cx, p.cy, isFocus ? 26 : 16, 0, Math.PI * 2);
     ctx.fillStyle = isFocus ? "rgba(255, 214, 102, 0.7)" : bodyColor;
     ctx.fill();
     ctx.restore();
 
+    // Pulse ring for focus AGVs
     if (isFocus && replay.highlightFocus) {
       ctx.save();
       ctx.beginPath();
-      ctx.arc(p.cx, p.cy, 17 + pulse * 8, 0, Math.PI * 2);
-      ctx.strokeStyle = `rgba(255, 224, 130, ${0.4 + pulse * 0.35})`;
-      ctx.lineWidth = 2.6;
+      ctx.arc(p.cx, p.cy, 20 + pulse * 10, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(255, 224, 130, ${0.45 + pulse * 0.4})`;
+      ctx.lineWidth = 3;
       ctx.stroke();
       ctx.restore();
     }
 
+    // AGV body
     ctx.save();
     ctx.globalAlpha = dimFactor;
     ctx.beginPath();
-    ctx.arc(p.cx, p.cy, isFocus ? 10 : 8, 0, Math.PI * 2);
+    ctx.arc(p.cx, p.cy, isFocus ? 12 : 8, 0, Math.PI * 2);
     ctx.fillStyle = bodyColor;
     ctx.fill();
     ctx.strokeStyle = isFocus ? "#ffe082" : color;
-    ctx.lineWidth = isFocus ? 3.5 : 2.6;
+    ctx.lineWidth = isFocus ? 4 : 2.6;
     ctx.stroke();
 
+    // Direction indicator
     const ang = (Number(agv.angle || 0) * Math.PI) / 180;
     ctx.beginPath();
     ctx.moveTo(p.cx, p.cy);
-    ctx.lineTo(p.cx + Math.cos(ang) * 16, p.cy + Math.sin(ang) * 16);
+    ctx.lineTo(p.cx + Math.cos(ang) * 18, p.cy + Math.sin(ang) * 18);
     ctx.strokeStyle = "rgba(6, 14, 20, 0.9)";
     ctx.lineWidth = 2;
     ctx.stroke();
 
+    // AGV ID label — always visible for focus, dimmed for others
     ctx.fillStyle = isFocus ? "#ffe082" : "#dbe7fa";
-    ctx.font = isFocus ? "bold 13px Arial" : "bold 11px Arial";
+    ctx.font = isFocus ? "bold 14px Arial" : "bold 11px Arial";
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
-    ctx.fillText(String(agv.id), p.cx, p.cy - 14);
+    ctx.fillText(String(agv.id), p.cx, p.cy - 16);
 
     if (isFocus) {
       const nextNode = parseNodeId(agv.nextNodeId);
       const phase = String(agv.phaseText || agv.phase || "");
       const extra = nextNode !== null ? ` -> N${nextNode}` : "";
       ctx.textBaseline = "top";
-      ctx.fillText(`${phase}${extra}`, p.cx, p.cy + 14);
+      ctx.fillText(`${phase}${extra}`, p.cx, p.cy + 16);
     }
     ctx.restore();
   }
