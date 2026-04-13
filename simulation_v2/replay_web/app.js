@@ -572,22 +572,9 @@ function drawPolyline(ctx, transform, points, style) {
   ctx.beginPath();
   const first = transform.toCanvas(points[0].x, points[0].y);
   ctx.moveTo(first.cx, first.cy);
-  if (style.smooth && points.length >= 3) {
-    // Catmull-Rom-like smooth curve through node positions
-    for (let i = 1; i < points.length; i += 1) {
-      const prev = transform.toCanvas(points[Math.max(0, i - 1)].x, points[Math.max(0, i - 1)].y);
-      const cur = transform.toCanvas(points[i].x, points[i].y);
-      const cpx = (prev.cx + cur.cx) / 2;
-      const cpy = (prev.cy + cur.cy) / 2;
-      ctx.quadraticCurveTo(prev.cx, prev.cy, cpx, cpy);
-    }
-    const last = transform.toCanvas(points[points.length - 1].x, points[points.length - 1].y);
-    ctx.lineTo(last.cx, last.cy);
-  } else {
-    for (let i = 1; i < points.length; i += 1) {
-      const pt = transform.toCanvas(points[i].x, points[i].y);
-      ctx.lineTo(pt.cx, pt.cy);
-    }
+  for (let i = 1; i < points.length; i += 1) {
+    const pt = transform.toCanvas(points[i].x, points[i].y);
+    ctx.lineTo(pt.cx, pt.cy);
   }
   ctx.stroke();
   ctx.restore();
@@ -714,7 +701,6 @@ function drawSelectedFirstPath(ctx, transform) {
       color: lineColor,
       width: 6.2,
       alpha: 0.98,
-      smooth: true,
     });
     const first = displayPoints[0];
     const second = displayPoints[Math.min(displayPoints.length - 1, 1)];

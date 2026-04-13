@@ -150,27 +150,112 @@ def extract_first_paths(
         if nid is not None:
             node_pos[nid] = (safe_float(n.get("x"), 0.0), safe_float(n.get("y"), 0.0))
 
-    # Reconstruct full routes from trail_update events
-    trail_routes: Dict[str, List[int]] = {}  # agv_id -> ordered node list
-    trail_updates = [
-        e for e in raw_events
-        if str(e.get("kind", "")).strip() == "trail_update"
-        and isinstance(e.get("node_ids"), list)
-    ]
+    # Build adjacency for gap-filling BFS
+    adj: Dict[int, List[int]] = {}
+    for e in map_json.get("edges", []):
+        a = int(e.get("startNode", e.get("startNodeId", 0)))
+        b = int(e.get("endNode", e.get("endNodeId", 0)))
+        adj.setdefault(a, []).append(b)
+        adj.setdefault(b, []).append(a)
+
+    def bfs_path(start: int, end: int, max_depth: int = 60) -> Optional[List[int]]:
+        """Find shortest path between two nodes on the map graph."""
+        if start == end:
+            return [start]
+        visited = {start}
+        queue: List[Tuple[int, List[int]]] = [(start, [start])]
+        while queue:
+            node, path = queue.pop(0)
+            if len(path) > max_depth:
+                return None
+            for nb in adj.get(node, []):
+                if nb == end:
+                    return path + [end]
+                if nb not in visited:
+                    visited.add(nb)
+                    queue.append((nb, path + [nb]))
+        return None
+
+    # 1. Start from path_update events (complete planned routes, no gaps)
+    path_routes: Dict[str, List[int]] = {}
+    path_updates = sorted(
+        [e for e in raw_events if str(e.get("kind", "")).strip() == "path_update"],
+        key=lambda e: safe_float(e.get("sim_time_s"), 0.0),
+    )
+    for pu in path_updates:
+        agv_id = str(pu.get("device_id", "")).strip()
+        if not agv_id or agv_id in path_routes:
+            continue
+        nids = [node_id(x) for x in pu.get("node_ids", [])]
+        nids = [n for n in nids if n is not None]
+        if len(nids) >= 2:
+            path_routes[agv_id] = nids
+
+    # 2. Extend routes using trail_update sliding windows
+    trail_updates = sorted(
+        [e for e in raw_events if str(e.get("kind", "")).strip() == "trail_update"],
+        key=lambda e: safe_float(e.get("sim_time_s"), 0.0),
+    )
     for tu in trail_updates:
         agv_id = str(tu.get("device_id", "")).strip()
         if not agv_id:
             continue
-        nids = tu.get("node_ids", [])
-        if agv_id not in trail_routes:
-            trail_routes[agv_id] = []
-        route = trail_routes[agv_id]
-        for raw_nid in nids:
-            nid = node_id(raw_nid)
-            if nid is None:
+        window = [node_id(x) for x in tu.get("node_ids", [])]
+        window = [n for n in window if n is not None]
+        if len(window) < 2:
+            continue
+
+        route = path_routes.get(agv_id)
+        if route is None:
+            path_routes[agv_id] = list(window)
+            continue
+
+        # Find overlap: look for window[0] in the tail of the existing route
+        # (trail windows slide forward, so window[0] should be somewhere in route)
+        try:
+            # Search from the end for efficiency
+            overlap_idx = None
+            for ri in range(len(route) - 1, max(len(route) - 20, -1), -1):
+                if route[ri] == window[0]:
+                    overlap_idx = ri
+                    break
+            if overlap_idx is not None:
+                # Check how much of the window already matches
+                match_len = 0
+                for wi in range(len(window)):
+                    ri = overlap_idx + wi
+                    if ri < len(route) and route[ri] == window[wi]:
+                        match_len = wi + 1
+                    else:
+                        break
+                # Append only the new tail from the window
+                new_nodes = window[match_len:]
+                if new_nodes:
+                    route.extend(new_nodes)
+            else:
+                # Window doesn't overlap — try to connect via last node of route
+                last = route[-1]
+                if window[0] in adj.get(last, []):
+                    route.extend(window)
+        except (ValueError, IndexError):
+            pass
+
+    # 3. Fill any remaining adjacency gaps with BFS
+    for agv_id, route in path_routes.items():
+        filled: List[int] = [route[0]]
+        for i in range(1, len(route)):
+            prev, cur = filled[-1], route[i]
+            if prev == cur:
                 continue
-            if not route or route[-1] != nid:
-                route.append(nid)
+            if cur in adj.get(prev, []):
+                filled.append(cur)
+            else:
+                bridge = bfs_path(prev, cur)
+                if bridge and len(bridge) <= 40:
+                    filled.extend(bridge[1:])  # skip first (== prev)
+                else:
+                    filled.append(cur)  # can't fix, just append
+        path_routes[agv_id] = filled
 
     # Capture first subtask and start time from frames
     first_subtask: Dict[str, Optional[Dict[str, Any]]] = {}
@@ -190,19 +275,18 @@ def extract_first_paths(
             st = agv.get("nextSubtask")
             first_subtask[agv_id] = dict(st) if isinstance(st, dict) else None
 
-    # Build first_paths from trail routes + map positions
+    # Build first_paths from reconstructed routes + map positions
     first_paths: Dict[str, Dict[str, Any]] = {}
-    for agv_id, route in trail_routes.items():
+    for agv_id, route in path_routes.items():
         if len(route) < 2:
             continue
-        # Truncate route at first subtask to avoid storing entire sim route
+        # Truncate route at first subtask
         st = first_subtask.get(agv_id)
         st_nid = node_id(st.get("nodeId")) if isinstance(st, dict) else None
         if st_nid is not None and st_nid in route:
             cut = route.index(st_nid)
             route = route[: cut + 1]
         else:
-            # No subtask match: keep first 120 nodes as reasonable initial path
             route = route[:120]
         points: List[Dict[str, Any]] = []
         for nid in route:
