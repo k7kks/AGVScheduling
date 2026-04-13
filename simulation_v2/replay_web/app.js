@@ -682,20 +682,37 @@ function drawSelectedFirstPath(ctx, transform) {
     ctx.fillText("首次 Path", p.cx + 10, p.cy - 6);
   }
   if (subtask && Number.isFinite(Number(subtask.x)) && Number.isFinite(Number(subtask.y))) {
-    const p = transform.toCanvas(Number(subtask.x), Number(subtask.y));
+    const sp = transform.toCanvas(Number(subtask.x), Number(subtask.y));
+    if (end) {
+      const ep = transform.toCanvas(end.x, end.y);
+      const dx = sp.cx - ep.cx;
+      const dy = sp.cy - ep.cy;
+      if (dx * dx + dy * dy > 25) {
+        ctx.beginPath();
+        ctx.setLineDash([6, 4]);
+        ctx.strokeStyle = "#ffd166";
+        ctx.lineWidth = 2.4;
+        ctx.globalAlpha = 0.7;
+        ctx.moveTo(ep.cx, ep.cy);
+        ctx.lineTo(sp.cx, sp.cy);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+      }
+    }
     ctx.beginPath();
-    ctx.arc(p.cx, p.cy, 10, 0, Math.PI * 2);
+    ctx.arc(sp.cx, sp.cy, 10, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(255, 214, 102, 0.18)";
     ctx.fill();
     ctx.beginPath();
-    ctx.arc(p.cx, p.cy, 5.5, 0, Math.PI * 2);
+    ctx.arc(sp.cx, sp.cy, 5.5, 0, Math.PI * 2);
     ctx.fillStyle = "#ffd166";
     ctx.fill();
     ctx.font = "bold 12px Arial";
     ctx.fillStyle = "#ffd166";
     ctx.textAlign = "left";
     ctx.textBaseline = "bottom";
-    ctx.fillText("首个子任务点", p.cx + 12, p.cy - 4);
+    ctx.fillText("首个子任务点", sp.cx + 12, sp.cy - 4);
   }
   if (first && second) {
     const p0 = transform.toCanvas(first.x, first.y);
@@ -724,11 +741,12 @@ function drawAgvs(ctx, transform, frame, focus, event) {
     const isFocus = focus.agvIds.includes(String(agv.id));
     const dimFactor = hasEmphasis && !isFocus ? 0.28 : 1;
 
-    if (mode !== "trail") {
+    const isFollowed = String(agv.id) === String(replay.followAgvId);
+    if (mode !== "trail" || isFollowed) {
       drawPolyline(ctx, transform, agv.path || [], {
         color,
-        width: isFocus ? 3.4 : 2.1,
-        alpha: (isFocus ? 0.6 : 0.3) * dimFactor,
+        width: isFollowed ? 4.8 : isFocus ? 3.4 : 2.1,
+        alpha: isFollowed ? 0.9 : (isFocus ? 0.6 : 0.3) * dimFactor,
       });
     }
     if (mode !== "path") {

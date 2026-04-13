@@ -60,7 +60,7 @@
 
       #app {
         display: grid;
-        grid-template-columns: 280px minmax(0, 1fr) 420px;
+        grid-template-columns: 380px minmax(0, 1fr) 420px;
         gap: 16px;
         height: 100vh;
         min-height: 100vh;
@@ -187,8 +187,9 @@
       }
 
       .section-title {
-        font-size: 14px;
+        font-size: 15px;
         font-weight: 800;
+        color: #ffca8a;
       }
 
       .section-note {
@@ -205,36 +206,41 @@
       }
 
       .scene-item {
-        padding: 14px;
+        padding: 16px 16px 16px 20px;
         margin: 0 8px 10px 8px;
         border-radius: 18px;
-        border: 1px solid var(--line);
-        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-left: 4px solid rgba(255, 159, 67, 0.45);
+        background: rgba(255, 255, 255, 0.055);
         cursor: pointer;
-        transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+        transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
       }
 
       .scene-item:hover {
         transform: translateY(-1px);
-        box-shadow: 0 14px 28px rgba(0, 0, 0, 0.16);
+        box-shadow: 0 14px 28px rgba(0, 0, 0, 0.2);
+        background: rgba(255, 255, 255, 0.08);
+        border-left-color: rgba(255, 159, 67, 0.7);
       }
 
       .scene-item.active {
         border-color: rgba(255, 159, 67, 0.75);
-        background: rgba(255, 159, 67, 0.14);
+        border-left-color: #ff9f43;
+        background: rgba(255, 159, 67, 0.16);
+        box-shadow: 0 8px 24px rgba(255, 159, 67, 0.12);
       }
 
       .scene-index {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 28px;
-        height: 28px;
+        width: 32px;
+        height: 32px;
         border-radius: 999px;
-        background: rgba(255, 255, 255, 0.1);
-        font-size: 12px;
+        background: rgba(255, 159, 67, 0.18);
+        font-size: 13px;
         font-weight: 800;
-        color: var(--text);
+        color: #ffd6a8;
       }
 
       .scene-top {
@@ -252,7 +258,7 @@
 
       .scene-title {
         margin-top: 10px;
-        font-size: 15px;
+        font-size: 16px;
         font-weight: 800;
       }
 
@@ -573,7 +579,7 @@
 
       @media (max-width: 1200px) {
         #app {
-          grid-template-columns: 260px 1fr;
+          grid-template-columns: 320px 1fr;
           height: 100vh;
         }
 
@@ -629,7 +635,7 @@
         <div class="section">
           <div class="eyebrow">Leader Replay</div>
           <h1>调度演示回放</h1>
-          <div class="subtitle">5 个高层场景，进度条可拖动，点击 AGV 可高亮首次全局 Path。</div>
+          <div class="subtitle">点击左侧场景卡片跳转到关键时刻，选中 AGV 可高亮路径。</div>
           <div class="badges" id="top-badges"></div>
         </div>
 
