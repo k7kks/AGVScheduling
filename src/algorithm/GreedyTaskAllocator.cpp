@@ -2,6 +2,7 @@
 #include <limits>
 #include <iostream>
 #include <cstdlib>
+#include <cmath>
 #include "data/Amr.h"
 #include "data/Task.h"
 
@@ -14,6 +15,15 @@ AllocationResult GreedyTaskAllocator::allocate(
     int taskNum = taskList.size();                    // 从任务列表获取任务数量
     int amrNum = amrList.size();                      // 从AMR列表获取AMR数量
     const double INF = std::numeric_limits<double>::max();
+
+    // 负载均衡惩罚：每多分配一个任务，增加固定代价惩罚
+    // 防止贪心算法将所有任务堆积在单个AGV上（滚雪球效应）
+    // 惩罚量 = taskCount * avgInitCost，使得已有N个任务的AGV
+    // 竞争力与距N个任务远的空闲AGV相当
+    double loadPenaltyMs = 10000.0;  // 每个已分配任务增加10s惩罚（默认值）
+    if (const char* ev = std::getenv("ALLOC_LOAD_PENALTY_MS")) {
+        try { loadPenaltyMs = std::stod(ev); } catch(...) {}
+    }
 
     // 初始化：每个AMR的任务列表、任务分配状态
     std::vector<std::vector<int>> amrTasks(amrNum);   // 存储任务索引（对应taskList）
@@ -81,6 +91,13 @@ AllocationResult GreedyTaskAllocator::allocate(
 
                 // 等待时间惩罚（与 POSTA 一致的到达时间定义）
                 double effectiveCost = cost;
+
+                // 负载均衡惩罚：已分配任务数 × 固定惩罚
+                // 防止贪心算法将所有任务堆积在单个AGV上（滚雪球效应）
+                if (loadPenaltyMs > 0.0 && !amrTasks[amrId].empty()) {
+                    effectiveCost += loadPenaltyMs * static_cast<double>(amrTasks[amrId].size());
+                }
+
                 if (waitPenaltyCoeff > 0.0 && baseNowSec > 0.0 &&
                     taskId < (int)taskArriveSec.size() && taskArriveSec[taskId] > 0.0) {
                     double startSec = baseNowSec + (amrAccum[amrId] / 1000.0);

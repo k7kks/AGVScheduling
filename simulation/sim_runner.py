@@ -2804,7 +2804,28 @@ def send_status(publisher: MQPublisher, status_list: List[Dict[str, Any]]) -> No
 
 def send_tasks(publisher: MQPublisher, task_payload: Dict[str, Any], status_list: Optional[List[Dict[str, Any]]]) -> None:
     routing_key = env("EXT_ROUTING_KEY", "AssignmentTaskRequest")
+    # Refresh task timestamps to prevent age-bonus from collapsing costs
+    _refresh_task_timestamps(task_payload)
     publisher.publish_json(routing_key, build_task_payload(task_payload, status_list))
+
+
+def _refresh_task_timestamps(payload: Dict[str, Any]) -> None:
+    """Overwrite task timestamp fields with current time.
+
+    The allocation cost-matrix applies an age-bonus that subtracts
+    cost proportional to how long a task has been waiting.  When tasks
+    carry build-time or historical timestamps the bonus saturates and
+    all costs collapse to the -60 000 ms floor, destroying any
+    geographic differentiation and causing single-AGV monopoly.
+    """
+    now_iso = iso_timestamp()
+    for task in payload.get("candidateTasks", []):
+        if not isinstance(task, dict):
+            continue
+        for key in ("timestamp", "expectedStartTime", "expectedCompletionTime",
+                    "createTimestamp", "createTimestampISO", "expectedStartTimeISO"):
+            if key in task:
+                task[key] = now_iso
 
 
 def send_path_request(publisher: MQPublisher, device_id: str) -> None:

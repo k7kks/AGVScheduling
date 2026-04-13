@@ -499,8 +499,16 @@ def main() -> int:
     if not args.no_attach_status:
         clean_tasks_payload["agvStatusList"] = status_list
 
+    # Rewrite historical timestamps to current time so age-bonus
+    # in the allocator does not collapse all costs to the floor.
+    fresh_ts = datetime.now(SHANGHAI_TZ).isoformat(timespec="seconds")
     for task in selected_tasks:
         clean_task = {k: v for k, v in task.items() if not k.startswith("_")}
+        for ts_key in ("timestamp", "createTimestamp", "expectedStartTime",
+                        "createTimestampISO", "expectedStartTimeISO",
+                        "expectedCompletionTime"):
+            if ts_key in clean_task:
+                clean_task[ts_key] = fresh_ts
         clean_tasks_payload["candidateTasks"].append(clean_task)
 
     summary = {
