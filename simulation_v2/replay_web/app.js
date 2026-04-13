@@ -1431,6 +1431,18 @@ function bindUi() {
     const agvId = String(button.getAttribute("data-agv-id") || "");
     if (!agvId) return;
     replay.followAgvId = replay.followAgvId === agvId ? "" : agvId;
+    if (replay.followAgvId) {
+      const frame = currentFrame();
+      const agv = frame.agvs.find((a) => String(a.id) === replay.followAgvId);
+      if (agv && Number.isFinite(Number(agv.x)) && Number.isFinite(Number(agv.y))) {
+        replay.mainCamera.centerX = Number(agv.x);
+        replay.mainCamera.centerY = Number(agv.y);
+        replay.mainCamera.targetCenterX = Number(agv.x);
+        replay.mainCamera.targetCenterY = Number(agv.y);
+        replay.mainCamera.zoom = clamp(2.2, ZOOM_MIN, ZOOM_MAX);
+        replay.mainCamera.targetZoom = replay.mainCamera.zoom;
+      }
+    }
     render({ snapCamera: true, forceEventList: true });
   });
 
