@@ -5414,6 +5414,23 @@ static bool owner_holds_group_body_nodes(const CorridorGroupInfo& group,
     return false;
 }
 
+static bool owner_can_continue_through_bridge_body_node(
+    const std::vector<CorridorGroupInfo>* corridorGroups,
+    const NodeReservationTable& reservations,
+    const std::string& ownerAgvId,
+    int currentNodeId,
+    int nodeId) {
+    if (!corridorGroups || ownerAgvId.empty() || currentNodeId < 0 || nodeId < 0) return false;
+    for (const auto& group : *corridorGroups) {
+        if (!group.isBridge) continue;
+        if (!corridor_group_contains_node(group, currentNodeId)) continue;
+        if (!corridor_group_contains_node(group, nodeId)) continue;
+        if (!owner_holds_group_body_nodes(group, reservations, ownerAgvId)) continue;
+        return true;
+    }
+    return false;
+}
+
 static std::vector<int> trim_route_to_current_node(const std::vector<int>& route, int currentNodeId) {
     std::vector<int> out = route;
     if (currentNodeId < 0) return out;
@@ -6500,14 +6517,23 @@ static std::vector<int> filter_hard_blocked_nodes_for_start(
     const RegionCongestionInfo& region,
     const MapInfo& mapInfo,
     const NodeReservationTable& reservations,
+    const std::vector<CorridorGroupInfo>* corridorGroups,
+    const std::string& ownerAgvId,
     int startNodeId) {
     (void)region;
     (void)mapInfo;
-    (void)reservations;
     std::vector<int> out;
     if (hardBlocked.empty()) return out;
     for (int nodeId : hardBlocked) {
         if (nodeId == startNodeId) continue;
+        if (owner_can_continue_through_bridge_body_node(
+                corridorGroups,
+                reservations,
+                ownerAgvId,
+                startNodeId,
+                nodeId)) {
+            continue;
+        }
         out.push_back(nodeId);
     }
     return out;
@@ -7801,7 +7827,13 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
         }
 	        std::vector<int> hardBlockedFiltered;
         if (enableCongestionAvoid && !congestion.hardBlocked.empty()) {
-            hardBlockedFiltered = filter_hard_blocked_nodes_for_start(congestion.hardBlocked, region, mapInfo, reservations, fromNodeId);
+            hardBlockedFiltered = filter_hard_blocked_nodes_for_start(congestion.hardBlocked,
+                                                                      region,
+                                                                      mapInfo,
+                                                                      reservations,
+                                                                      corridorGroups,
+                                                                      deviceId,
+                                                                      fromNodeId);
             localBanned.insert(hardBlockedFiltered.begin(), hardBlockedFiltered.end());
         }
         if (baseBanned && !baseBanned->empty()) {
@@ -7813,11 +7845,18 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
             const bool goalBlockedByHard =
                 std::find(hardBlockedFiltered.begin(), hardBlockedFiltered.end(), goalNodeId)
                 != hardBlockedFiltered.end();
+            const bool goalAllowedByOwnedBridge =
+                owner_can_continue_through_bridge_body_node(corridorGroups,
+                                                            reservations,
+                                                            deviceId,
+                                                            fromNodeId,
+                                                            goalNodeId);
 	            if (enableCongestionAvoid && region.valid() && !region.hardBlockedNodes.empty()) {
                 int startCell = region.cellIndexForNode(mapInfo, fromNodeId);
                 int goalCell = region.cellIndexForNode(mapInfo, goalNodeId);
                 if (region.hardBlockedNodes.count(goalNodeId) > 0 &&
-                    startCell >= 0 && goalCell >= 0 && startCell != goalCell) {
+                    startCell >= 0 && goalCell >= 0 && startCell != goalCell &&
+                    !goalAllowedByOwnedBridge) {
                     goalBlockedByRegion = true;
                 }
             }
@@ -7887,11 +7926,18 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
             const bool goalBlockedByHard =
                 std::find(hardBlockedFiltered.begin(), hardBlockedFiltered.end(), goalNodeId)
                 != hardBlockedFiltered.end();
+            const bool goalAllowedByOwnedBridge =
+                owner_can_continue_through_bridge_body_node(corridorGroups,
+                                                            reservations,
+                                                            deviceId,
+                                                            fromNodeId,
+                                                            goalNodeId);
             if (enableCongestionAvoid && region.valid() && !region.hardBlockedNodes.empty()) {
                 int startCell = region.cellIndexForNode(mapInfo, fromNodeId);
                 int goalCell = region.cellIndexForNode(mapInfo, goalNodeId);
                 if (region.hardBlockedNodes.count(goalNodeId) > 0 &&
-                    startCell >= 0 && goalCell >= 0 && startCell != goalCell) {
+                    startCell >= 0 && goalCell >= 0 && startCell != goalCell &&
+                    !goalAllowedByOwnedBridge) {
                     goalBlockedByRegion = true;
                 }
 	            }
@@ -8525,6 +8571,44 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
     }
 
     std::unordered_set<int> committedSet(committedPrefix.begin(), committedPrefix.end());
+    std::unordered_set<int> reserveHardBlockedNodes;
+    if (enableCongestionAvoid && !congestion.hardBlocked.empty()) {
+        auto filtered = filter_hard_blocked_nodes_for_start(congestion.hardBlocked,
+                                                            region,
+                                                            mapInfo,
+                                                            reservations,
+                                                            corridorGroups,
+                                                            deviceId,
+                                                            startNodeId);
+        reserveHardBlockedNodes.insert(filtered.begin(), filtered.end());
+    }
+    const int reserveStartCell = region.valid()
+        ? region.cellIndexForNode(mapInfo, startNodeId)
+        : -1;
+    auto reserve_hard_block_detail_for_node = [&](int nodeId) -> std::string {
+        if (nodeId < 0 || nodeId == startNodeId) return {};
+        if (reserveHardBlockedNodes.count(nodeId) > 0) {
+            return "congestion_hard";
+        }
+        if (!enableCongestionAvoid || !region.valid() || region.hardBlockedNodes.empty()) {
+            return {};
+        }
+        if (region.hardBlockedNodes.count(nodeId) == 0) {
+            return {};
+        }
+        if (owner_can_continue_through_bridge_body_node(corridorGroups,
+                                                        reservations,
+                                                        deviceId,
+                                                        startNodeId,
+                                                        nodeId)) {
+            return {};
+        }
+        int nodeCell = region.cellIndexForNode(mapInfo, nodeId);
+        if (reserveStartCell >= 0 && nodeCell >= 0 && reserveStartCell != nodeCell) {
+            return "region_hard";
+        }
+        return {};
+    };
     struct ReserveDebugInfo {
         int blockedNode = -1;
         size_t blockedIndex = 0;
@@ -8626,6 +8710,27 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
                 }
             }
             const bool isCommitted = committedSet.count(nodeId) > 0;
+            if (!isCommitted) {
+                const std::string hardBlockDetail = reserve_hard_block_detail_for_node(nodeId);
+                if (!hardBlockDetail.empty()) {
+                    if (dbg) {
+                        dbg->blockedNode = nodeId;
+                        dbg->blockedIndex = i;
+                        dbg->blockedReason = "hard_block";
+                        dbg->blockedDetail = hardBlockDetail;
+                    }
+                    if (logSummary) {
+                        std::cout << log_time_prefix()
+                                  << "[Reserve] hard-block deviceId=" << deviceId
+                                  << " node=" << nodeId
+                                  << " idx=" << i
+                                  << " detail=" << hardBlockDetail
+                                  << " routeHead=" << format_nodes_head(route)
+                                  << std::endl;
+                    }
+                    break;
+                }
+            }
             NodeReservationTable::HoldReason holdReason = isCommitted
                 ? NodeReservationTable::HoldReason::RESERVED_PATH
                 : (tempGoal ? NodeReservationTable::HoldReason::TEMP_GOAL
