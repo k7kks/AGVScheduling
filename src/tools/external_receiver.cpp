@@ -1162,6 +1162,11 @@ struct CorridorGroupInfo {
     bool isHorizontal = false;
     int sameDirectionCapacity = 1;
 };
+
+struct GroupTravelIntent {
+    int direction = 0;
+    bool exclusive = false;
+};
 static std::vector<CorridorGroupInfo> detect_corridor_groups(
     const MapInfo& mapInfo, const std::vector<int>& bridgeNodeIds);
 
@@ -5225,6 +5230,228 @@ static int infer_corridor_group_direction_from_route(const MapInfo& mapInfo,
     return corridor_group_direction_between(mapInfo, group, fallbackFrom, fallbackTo);
 }
 
+static GroupTravelIntent infer_corridor_group_travel_intent(const MapInfo& mapInfo,
+                                                            const CorridorGroupInfo& group,
+                                                            const std::vector<int>& route,
+                                                            int currentNodeId,
+                                                            int goalNodeId) {
+    GroupTravelIntent intent;
+    std::vector<int> context;
+    context.reserve(route.size() + 2);
+    auto append_context = [&](int nodeId) {
+        if (nodeId < 0 || !corridor_group_contains_or_entry(group, nodeId)) return;
+        if (context.empty() || context.back() != nodeId) context.push_back(nodeId);
+    };
+    append_context(currentNodeId);
+    for (int nodeId : route) append_context(nodeId);
+
+    bool sawPos = false;
+    bool sawNeg = false;
+    for (size_t i = 1; i < context.size(); ++i) {
+        const int sign = corridor_group_direction_between(mapInfo, group, context[i - 1], context[i]);
+        if (sign > 0) sawPos = true;
+        else if (sign < 0) sawNeg = true;
+    }
+
+    intent.direction = infer_corridor_group_direction_from_route(
+        mapInfo,
+        group,
+        route,
+        currentNodeId,
+        goalNodeId);
+    const bool goalInsideBridge = corridor_group_contains_node(group, goalNodeId);
+    if ((sawPos && sawNeg) || goalInsideBridge || intent.direction == 0) {
+        intent.direction = 0;
+        intent.exclusive = true;
+    }
+    return intent;
+}
+
+struct BridgeOccupantState {
+    std::string ownerAgvId;
+    std::chrono::steady_clock::time_point enteredAt{};
+    std::vector<int> reservedBridgeNodes;
+    GroupTravelIntent intent;
+};
+
+static std::vector<BridgeOccupantState> collect_bridge_group_occupants(
+    const MapInfo& mapInfo,
+    const CorridorGroupInfo& group,
+    RobotDataRepository& repo,
+    const NodeReservationTable& reservations) {
+    struct OccupantAggregate {
+        std::chrono::steady_clock::time_point enteredAt{};
+        std::vector<int> reservedBridgeNodes;
+    };
+
+    std::unordered_map<std::string, OccupantAggregate> aggregated;
+    for (int nodeId : group.nodeIds) {
+        auto hold = reservations.get(nodeId);
+        if (!hold.has_value() || hold->ownerAgvId.empty()) continue;
+        auto& agg = aggregated[hold->ownerAgvId];
+        if (agg.reservedBridgeNodes.empty() || hold->updatedAt < agg.enteredAt) {
+            agg.enteredAt = hold->updatedAt;
+        }
+        agg.reservedBridgeNodes.push_back(nodeId);
+    }
+
+    static std::mutex bridgeOccupancyMutex;
+    static std::unordered_map<std::string, std::unordered_map<std::string, std::chrono::steady_clock::time_point>>
+        bridgeEnteredAtByGroup;
+    {
+        std::lock_guard<std::mutex> lk(bridgeOccupancyMutex);
+        auto& groupEntries = bridgeEnteredAtByGroup[group.resourceKey];
+        for (const auto& item : aggregated) {
+            if (groupEntries.count(item.first) == 0) {
+                groupEntries[item.first] = item.second.enteredAt;
+            }
+        }
+        for (auto it = groupEntries.begin(); it != groupEntries.end();) {
+            if (aggregated.count(it->first) == 0) {
+                it = groupEntries.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        if (groupEntries.empty()) {
+            bridgeEnteredAtByGroup.erase(group.resourceKey);
+        } else {
+            for (auto& item : aggregated) {
+                auto entryIt = groupEntries.find(item.first);
+                if (entryIt != groupEntries.end()) item.second.enteredAt = entryIt->second;
+            }
+        }
+    }
+
+    std::vector<BridgeOccupantState> out;
+    out.reserve(aggregated.size());
+    for (auto& item : aggregated) {
+        auto rt = repo.snapshotRuntimeState(item.first);
+        std::vector<int> route = rt.reservedNodes;
+        if (route.empty()) route = repo.getLastSentRoute(item.first);
+        if (route.empty()) route = item.second.reservedBridgeNodes;
+        int currentNodeId = rt.lastStatusNodeId;
+        if (currentNodeId < 0 && !item.second.reservedBridgeNodes.empty()) {
+            currentNodeId = item.second.reservedBridgeNodes.front();
+        }
+        int goalNodeId = !rt.targets.empty() ? rt.targets.front().nodeId : -1;
+        if (goalNodeId < 0 && !item.second.reservedBridgeNodes.empty()) {
+            goalNodeId = item.second.reservedBridgeNodes.back();
+        }
+
+        BridgeOccupantState state;
+        state.ownerAgvId = item.first;
+        state.enteredAt = item.second.enteredAt;
+        state.reservedBridgeNodes = std::move(item.second.reservedBridgeNodes);
+        state.intent = infer_corridor_group_travel_intent(
+            mapInfo,
+            group,
+            route,
+            currentNodeId,
+            goalNodeId);
+        out.push_back(std::move(state));
+    }
+
+    std::sort(out.begin(), out.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.enteredAt < rhs.enteredAt;
+    });
+    return out;
+}
+
+struct BridgeGroupAdmission {
+    bool allowed = true;
+    bool selfOccupiesBridge = false;
+    std::string blockerAgvId;
+    std::string detail;
+    int direction = 0;
+    int occupantCount = 0;
+};
+
+static BridgeGroupAdmission evaluate_bridge_group_admission(
+    const MapInfo& mapInfo,
+    const CorridorGroupInfo& group,
+    RobotDataRepository& repo,
+    const NodeReservationTable& reservations,
+    const std::string& ownerAgvId,
+    const GroupTravelIntent& requestedIntent) {
+    BridgeGroupAdmission admission;
+    if (!group.isBridge || !group.isStraight || group.sameDirectionCapacity <= 1) {
+        return admission;
+    }
+    const auto occupants = collect_bridge_group_occupants(mapInfo, group, repo, reservations);
+    if (occupants.empty()) return admission;
+
+    const BridgeOccupantState* leader = nullptr;
+    for (const auto& occupant : occupants) {
+        if (occupant.ownerAgvId.empty()) continue;
+        if (occupant.ownerAgvId == ownerAgvId) admission.selfOccupiesBridge = true;
+        if (!leader) leader = &occupant;
+    }
+    if (!leader) return admission;
+
+    admission.blockerAgvId = leader->ownerAgvId;
+    admission.direction = leader->intent.direction;
+    bool exclusive = leader->intent.exclusive || leader->intent.direction == 0;
+    for (const auto& occupant : occupants) {
+        if (occupant.ownerAgvId.empty()) continue;
+        if (occupant.intent.exclusive || occupant.intent.direction == 0) {
+            exclusive = true;
+            continue;
+        }
+        if (admission.direction != 0 && occupant.intent.direction != admission.direction) {
+            exclusive = true;
+            continue;
+        }
+        if (occupant.intent.direction == admission.direction) {
+            admission.occupantCount += 1;
+        }
+    }
+
+    // Once this AGV already holds a bridge-body node, let it keep planning so it can exit.
+    // New entrants are still controlled by the leader/capacity checks below.
+    if (admission.selfOccupiesBridge) return admission;
+
+    if (exclusive) {
+        admission.allowed = false;
+        admission.detail = "bridge_exclusive";
+        return admission;
+    }
+    if (requestedIntent.exclusive || requestedIntent.direction == 0) {
+        admission.allowed = false;
+        admission.detail = "bridge_self_exclusive";
+        return admission;
+    }
+    if (requestedIntent.direction != admission.direction) {
+        admission.allowed = false;
+        admission.detail = (admission.direction > 0) ? "bridge_dir_pos" : "bridge_dir_neg";
+        return admission;
+    }
+    if (admission.occupantCount >= std::max(1, group.sameDirectionCapacity)) {
+        admission.allowed = false;
+        admission.detail = "bridge_capacity";
+        return admission;
+    }
+    return admission;
+}
+
+static void prune_bridge_group_holds_to_actual_occupants(
+    NodeReservationTable& reservations,
+    const CorridorGroupInfo& group,
+    const std::vector<BridgeOccupantState>& occupants) {
+    if (group.resourceKey.empty()) return;
+    std::unordered_set<std::string> activeOwners;
+    activeOwners.reserve(occupants.size());
+    for (const auto& occupant : occupants) {
+        if (!occupant.ownerAgvId.empty()) activeOwners.insert(occupant.ownerAgvId);
+    }
+    auto holds = reservations.snapshotDirectionalGroupHolds(group.resourceKey);
+    for (const auto& hold : holds) {
+        if (hold.ownerAgvId.empty()) continue;
+        if (activeOwners.count(hold.ownerAgvId) > 0) continue;
+        reservations.releaseDirectionalGroup(group.resourceKey, hold.ownerAgvId);
+    }
+}
+
 static std::string make_corridor_group_resource_key(bool isBridge,
                                                     const std::vector<int>& nodeIds) {
     std::ostringstream oss;
@@ -5439,23 +5666,29 @@ static std::vector<GroupReservationRequirement> collect_group_reservation_requir
 
         GroupReservationRequirement req;
         req.resourceKey = group.resourceKey;
-        req.sameDirectionCapacity =
-            (group.isBridge && group.isStraight) ? std::max(1, group.sameDirectionCapacity) : 1;
+        GroupTravelIntent intent = infer_corridor_group_travel_intent(
+            mapInfo,
+            group,
+            route,
+            currentNodeId,
+            goalNodeId);
+        req.sameDirectionCapacity = 1;
         req.direction = 0;
-        if (group.isBridge && group.isStraight && req.sameDirectionCapacity > 1) {
-            req.direction = infer_corridor_group_direction_from_route(
-                mapInfo,
-                group,
-                route,
-                currentNodeId,
-                goalNodeId);
+        if (group.isBridge && group.isStraight && !intent.exclusive) {
+            req.sameDirectionCapacity = std::max(1, group.sameDirectionCapacity);
+            req.direction = intent.direction;
             if (req.direction == 0) {
                 auto existing = reservations.getDirectionalGroupHold(group.resourceKey, ownerAgvId);
-                if (existing.has_value()) req.direction = existing->direction;
+                if (existing.has_value() && existing->direction != 0) {
+                    req.direction = existing->direction;
+                } else {
+                    intent.exclusive = true;
+                }
             }
         }
         if (group.isBridge) {
-            req.detail = (req.direction > 0) ? "bridge_dir_pos"
+            req.detail = intent.exclusive ? "bridge_exclusive"
+                       : (req.direction > 0) ? "bridge_dir_pos"
                        : (req.direction < 0) ? "bridge_dir_neg"
                                              : "bridge_exclusive";
         } else {
@@ -5513,13 +5746,14 @@ static void sync_group_requirements(NodeReservationTable& reservations,
     std::vector<std::string> keepKeys;
     keepKeys.reserve(reqs.size());
     for (const auto& req : reqs) {
-        reservations.tryReserveDirectionalGroup(req.resourceKey,
-                                                ownerAgvId,
-                                                req.direction,
-                                                req.sameDirectionCapacity,
-                                                req.detail,
-                                                ttl);
-        keepKeys.push_back(req.resourceKey);
+        if (reservations.tryReserveDirectionalGroup(req.resourceKey,
+                                                    ownerAgvId,
+                                                    req.direction,
+                                                    req.sameDirectionCapacity,
+                                                    req.detail,
+                                                    ttl)) {
+            keepKeys.push_back(req.resourceKey);
+        }
     }
     reservations.releaseAllDirectionalGroupsByOwnerExceptSet(ownerAgvId, keepKeys);
 }
@@ -6473,6 +6707,22 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
         return out;
     }
     out.startNodeId = startNodeId;
+    if (!deviceId.empty()) {
+        auto startHold = reservations.get(startNodeId);
+        if (!startHold.has_value() || startHold->ownerAgvId == deviceId) {
+            const auto holdReason = startHold.has_value()
+                ? startHold->reason
+                : NodeReservationTable::HoldReason::RESERVED_PATH;
+            const std::string holdDetail =
+                (startHold.has_value() && !startHold->detail.empty()) ? startHold->detail : "current";
+            reservations.tryReserve(
+                startNodeId,
+                deviceId,
+                holdReason,
+                holdDetail,
+                std::chrono::milliseconds(0));
+        }
+    }
 
     auto statusNowOpt = repo.getStatusById(deviceId);
     const bool enableTaskStatusGate = (getenv_int("REPLAN_TASK_STATUS_GATE_ENABLE", 0) != 0);
@@ -7070,7 +7320,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
             if (!rt.targets.empty()) return rt.targets.front().nodeId;
             return -1;
         };
-        auto self_group_direction = [&](const CorridorGroupInfo& group) -> int {
+        auto self_group_intent = [&](const CorridorGroupInfo& group) -> GroupTravelIntent {
             std::vector<int> route;
             if (rt.reservedNodes.size() > 1) route = rt.reservedNodes;
             else if (committedPrefix.size() > 1) route = committedPrefix;
@@ -7081,7 +7331,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
                     route.push_back(goalNode);
                 }
             }
-            return infer_corridor_group_direction_from_route(
+            return infer_corridor_group_travel_intent(
                 mapInfo,
                 group,
                 route,
@@ -7089,6 +7339,23 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
                 self_goal_node());
         };
         for (const auto& group : *corridorGroups) {
+            if (group.isBridge && group.isStraight && group.sameDirectionCapacity > 1) {
+                const auto selfIntent = self_group_intent(group);
+                const bool selfAtEntry = corridor_group_contains_entry(group, startNodeId);
+                const auto admission = evaluate_bridge_group_admission(
+                    mapInfo,
+                    group,
+                    repo,
+                    reservations,
+                    deviceId,
+                    selfIntent);
+                if (!admission.allowed && selfAtEntry) {
+                    preferBridgeWait = true;
+                    bridgeWaitGroup = &group;
+                }
+                continue;
+            }
+
             std::unordered_map<std::string, int> holderDirByAgv;
             auto groupHolds = reservations.snapshotDirectionalGroupHolds(group.resourceKey, deviceId);
             for (const auto& hold : groupHolds) {
@@ -7125,7 +7392,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
             }
             if (holderDirByAgv.empty()) continue;
 
-            const int selfDir = self_group_direction(group);
+            const int selfDir = self_group_intent(group).direction;
             int posCount = 0;
             int negCount = 0;
             int unknownCount = 0;
@@ -7898,52 +8165,87 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
         out.reserve(std::min<size_t>(route.size(), static_cast<size_t>(reserveBudget)));
         std::vector<int> routePrefix;
         routePrefix.reserve(std::min<size_t>(route.size(), static_cast<size_t>(reserveBudget)));
-        for (size_t i = 0; i < route.size() && static_cast<int>(routePrefix.size()) < reserveBudget; ++i) {
-            int nodeId = route[i];
-            if (nodeId < 0) continue;
-            routePrefix.push_back(nodeId);
-        }
-        auto groupReqs = (corridorGroups && !corridorGroups->empty())
-            ? collect_group_reservation_requirements(mapInfo,
-                                                     *corridorGroups,
-                                                     routePrefix,
-                                                     startNodeId,
-                                                     selectedGoal,
-                                                     reservations,
-                                                     deviceId)
-            : std::vector<GroupReservationRequirement>{};
-        NodeReservationTable::DirectionalGroupHoldEntry groupBlocker;
-        if (!groupReqs.empty() &&
-            !reserve_group_requirements(reservations,
-                                        deviceId,
-                                        groupReqs,
-                                        std::chrono::milliseconds(std::max(0, holdTtlMs)),
-                                        &groupBlocker)) {
-            if (dbg) {
-                dbg->blockedBy = groupBlocker.ownerAgvId;
-                dbg->blockedReason = "directional_group";
-                dbg->blockedDetail = groupBlocker.detail;
-                dbg->blockedGroup = groupBlocker.groupKey;
-                dbg->blockedDirection = groupBlocker.direction;
-            }
-            if (logSummary) {
-                std::cout << log_time_prefix()
-                          << "[Reserve] group blocked deviceId=" << deviceId
-                          << " group=" << groupBlocker.groupKey
-                          << " holder=" << (groupBlocker.ownerAgvId.empty() ? "<none>" : groupBlocker.ownerAgvId)
-                          << " dir=" << groupBlocker.direction
-                          << " detail=" << (groupBlocker.detail.empty() ? "<none>" : groupBlocker.detail)
-                          << std::endl;
-            }
-            reservations.releaseAllDirectionalGroupsByOwnerExceptSet(deviceId, {});
-            reservations.tryReserve(startNodeId, deviceId, NodeReservationTable::HoldReason::WAITING_POINT,
-                                    "current", std::chrono::milliseconds(0));
-            out.push_back(startNodeId);
-            return out;
-        }
         for (size_t i = 0; i < route.size() && (int)out.size() < reserveBudget; ++i) {
             int nodeId = route[i];
             if (nodeId < 0) continue;
+            if (corridorGroups && !corridorGroups->empty()) {
+                routePrefix.assign(out.begin(), out.end());
+                routePrefix.push_back(nodeId);
+                auto groupReqs = collect_group_reservation_requirements(mapInfo,
+                                                                        *corridorGroups,
+                                                                        routePrefix,
+                                                                        startNodeId,
+                                                                        selectedGoal,
+                                                                        reservations,
+                                                                        deviceId);
+                NodeReservationTable::DirectionalGroupHoldEntry groupBlocker;
+                bool groupBlockedByActualOccupancy = false;
+                for (const auto& req : groupReqs) {
+                    auto groupIt = std::find_if(
+                        corridorGroups->begin(),
+                        corridorGroups->end(),
+                        [&](const CorridorGroupInfo& groupInfo) {
+                            return groupInfo.resourceKey == req.resourceKey;
+                        });
+                    if (groupIt == corridorGroups->end()) continue;
+                    const CorridorGroupInfo& group = *groupIt;
+                    if (!group.isBridge || !group.isStraight || group.sameDirectionCapacity <= 1) continue;
+
+                    const auto occupants = collect_bridge_group_occupants(mapInfo, group, repo, reservations);
+                    prune_bridge_group_holds_to_actual_occupants(reservations, group, occupants);
+                    const auto requestedIntent = infer_corridor_group_travel_intent(
+                        mapInfo,
+                        group,
+                        routePrefix,
+                        startNodeId,
+                        selectedGoal);
+                    const auto admission = evaluate_bridge_group_admission(
+                        mapInfo,
+                        group,
+                        repo,
+                        reservations,
+                        deviceId,
+                        requestedIntent);
+                    if (admission.allowed) continue;
+
+                    groupBlockedByActualOccupancy = true;
+                    groupBlocker.groupKey = group.resourceKey;
+                    groupBlocker.ownerAgvId = admission.blockerAgvId;
+                    groupBlocker.direction = admission.direction;
+                    groupBlocker.sameDirectionCapacity = std::max(1, group.sameDirectionCapacity);
+                    groupBlocker.detail = admission.detail.empty() ? "bridge_occupied" : admission.detail;
+                    break;
+                }
+                if (!groupReqs.empty() &&
+                    (groupBlockedByActualOccupancy ||
+                     !reserve_group_requirements(reservations,
+                                                 deviceId,
+                                                 groupReqs,
+                                                 std::chrono::milliseconds(std::max(0, holdTtlMs)),
+                                                 &groupBlocker))) {
+                    if (dbg) {
+                        dbg->blockedNode = nodeId;
+                        dbg->blockedIndex = i;
+                        dbg->blockedBy = groupBlocker.ownerAgvId;
+                        dbg->blockedReason = "directional_group";
+                        dbg->blockedDetail = groupBlocker.detail;
+                        dbg->blockedGroup = groupBlocker.groupKey;
+                        dbg->blockedDirection = groupBlocker.direction;
+                    }
+                    if (logSummary) {
+                        std::cout << log_time_prefix()
+                                  << "[Reserve] group blocked deviceId=" << deviceId
+                                  << " node=" << nodeId
+                                  << " idx=" << i
+                                  << " group=" << groupBlocker.groupKey
+                                  << " holder=" << (groupBlocker.ownerAgvId.empty() ? "<none>" : groupBlocker.ownerAgvId)
+                                  << " dir=" << groupBlocker.direction
+                                  << " detail=" << (groupBlocker.detail.empty() ? "<none>" : groupBlocker.detail)
+                                  << std::endl;
+                    }
+                    break;
+                }
+            }
             const bool isCommitted = committedSet.count(nodeId) > 0;
             NodeReservationTable::HoldReason holdReason = isCommitted
                 ? NodeReservationTable::HoldReason::RESERVED_PATH
