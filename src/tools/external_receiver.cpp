@@ -861,6 +861,32 @@ public:
         return entry.nodes;
     }
 
+    bool markTrafficPayloadIfChanged(const ordered_json& payload) {
+        ordered_json signature;
+        signature["mapId"] = payload.value("mapId", 0);
+        if (payload.contains("mapVersion")) {
+            signature["mapVersion"] = payload["mapVersion"];
+        }
+        if (payload.contains("bridgeNodeIds")) {
+            signature["bridgeNodeIds"] = payload["bridgeNodeIds"];
+        }
+        signature["pathInfos"] = payload.contains("pathInfos")
+            ? payload["pathInfos"]
+            : ordered_json::array();
+        const std::string signatureStr = signature.dump();
+        std::lock_guard<std::mutex> lk(mutex_);
+        if (signatureStr == lastTrafficPayloadSignature_) {
+            return false;
+        }
+        lastTrafficPayloadSignature_ = signatureStr;
+        return true;
+    }
+
+    void clearTrafficPayloadSignature() {
+        std::lock_guard<std::mutex> lk(mutex_);
+        lastTrafficPayloadSignature_.clear();
+    }
+
     std::vector<RobotStatusEntry> snapshotStatuses() const {
         std::lock_guard<std::mutex> lk(mutex_);
         std::vector<RobotStatusEntry> out;
@@ -914,6 +940,7 @@ public:
         fallbackPaths_.clear();
         dynamicPlans_.clear();
         trafficPathRoutes_.clear();
+        lastTrafficPayloadSignature_.clear();
     }
 
     void clearDynamicStateKeepPlans() {
@@ -922,6 +949,7 @@ public:
         trailProgress_.clear();
         fallbackPaths_.clear();
         trafficPathRoutes_.clear();
+        lastTrafficPayloadSignature_.clear();
         for (auto& kv : runtime_) {
             PlanRuntimeState& rt = kv.second;
             rt.reservedNodes.clear();
@@ -969,6 +997,7 @@ public:
         trailProgress_.erase(deviceId);
         fallbackPaths_.erase(deviceId);
         trafficPathRoutes_.erase(deviceId);
+        lastTrafficPayloadSignature_.clear();
     }
 
 	private:
@@ -986,6 +1015,7 @@ public:
 	    std::unordered_map<std::string, FallbackPathEntry> fallbackPaths_;
         std::unordered_map<std::string,
                            std::unordered_map<std::string, TrafficPathRouteEntry>> trafficPathRoutes_;
+        std::string lastTrafficPayloadSignature_;
 
     static constexpr size_t kMaxTrackedSubTasks = 64;
 
@@ -1149,9 +1179,15 @@ static bool handle_map_info(const json& j,
                             NodeReservationTable& reservations,
                             std::unique_ptr<AStarPathFinder>& aStarPtr,
                             const std::string& cachePath,
-                            std::atomic<int>& mapId);
-static double reserve_near_conflict_threshold_mm();
+                            std::atomic<int>& mapId,
+                            struct FastNeighborhoodIndex* fastNeighborhoodIndex);
+static double fast_neighborhood_threshold_mm();
 static std::vector<int> build_bridge_rule_node_ids(const MapInfo& mapInfo);
+struct FastNeighborhoodIndex {
+    double thresholdMm = 0.0;
+    std::unordered_map<int, std::vector<int>> nodeIdsByNodeId;
+    std::unordered_map<std::uint64_t, double> graphDistanceMmByPair;
+};
 struct CorridorGroupInfo {
     std::string resourceKey;
     std::vector<int> nodeIds;
@@ -1197,6 +1233,7 @@ struct MapRuntimeContext {
     int mapId = 0;
     std::string mapVersion;
     std::vector<int> bridgeRuleNodeIds;
+    FastNeighborhoodIndex fastNeighborhoodIndex;
     // Per-corridor groups are enforced independently. Straight bridge groups can
     // admit limited same-direction flow; all other groups remain mutex-style.
     std::vector<CorridorGroupInfo> corridorGroups;
@@ -1526,15 +1563,21 @@ static bool reload_context_map_payload(const json& j,
     auto nextMapInfo = std::make_unique<MapInfo>(2);
     std::unique_ptr<AStarPathFinder> nextAStar;
     NodeReservationTable stagingReservations;
+    FastNeighborhoodIndex nextNeighborhoodIndex;
     std::atomic<int> parsedMapId(targetMapId);
     std::string cachePath = map_cache_path_for_id(cacheBasePath, targetMapId);
-    if (!handle_map_info(j, *nextMapInfo, stagingReservations, nextAStar, cachePath, parsedMapId)) {
+    if (!handle_map_info(j,
+                         *nextMapInfo,
+                         stagingReservations,
+                         nextAStar,
+                         cachePath,
+                         parsedMapId,
+                         &nextNeighborhoodIndex)) {
         return false;
     }
 
     const int resolvedMapId = parsedMapId.load() > 0 ? parsedMapId.load() : targetMapId;
-    const double nearConflictThresholdMm = std::max(0.0, reserve_near_conflict_threshold_mm());
-    ctx.nodeReservations.configureDistanceConflict(*nextMapInfo, nearConflictThresholdMm);
+    ctx.nodeReservations.configureDistanceConflict(*nextMapInfo, 0.0);
 
     {
         std::unique_lock<std::shared_mutex> mapWriteLock(ctx.mapMutex);
@@ -1542,6 +1585,7 @@ static bool reload_context_map_payload(const json& j,
         ctx.aStarPtr = std::move(nextAStar);
         ctx.activeMapId.store(resolvedMapId);
         ctx.mapVersion = detect_map_version_from_message(j);
+        ctx.fastNeighborhoodIndex = std::move(nextNeighborhoodIndex);
         ctx.bridgeRuleNodeIds = build_bridge_rule_node_ids(*ctx.mapInfoPtr);
         ctx.corridorGroups = detect_corridor_groups(*ctx.mapInfoPtr, ctx.bridgeRuleNodeIds);
         if (!ctx.corridorGroups.empty()) {
@@ -2521,6 +2565,26 @@ private:
     bool lineLogEnabled_ = false;
 };
 
+static bool publish_traffic_payload_if_changed(
+    const char* sourceTag,
+    const ordered_json& payload,
+    RobotDataRepository& repo,
+    TrafficPathPublisher& publisher,
+    TrafficDebugManager& trafficDebug) {
+    if (!repo.markTrafficPayloadIfChanged(payload)) {
+        if (env_enabled("RECEIVER_LOG_TRAFFIC_SUMMARY") || env_enabled("RECEIVER_LOG_TRAFFIC_DETAIL")) {
+            std::cout << log_time_prefix()
+                      << "[Traffic] skip unchanged source=" << (sourceTag ? sourceTag : "unknown")
+                      << std::endl;
+        }
+        return false;
+    }
+    const std::string payloadStr = payload.dump();
+    publisher.publishPayload(payloadStr);
+    trafficDebug.onPublish(payload, payloadStr, sourceTag ? sourceTag : "unknown");
+    return true;
+}
+
 static SchedulingRequest build_minimal_request(const json& j) {
     SchedulingRequest req;
     req.messageId = read_string(j, "schedulingRequestId", "");
@@ -2611,7 +2675,8 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
     ReplanStage stage,
     bool* updatedOut,
     bool* usedTempGoalOut = nullptr,
-    const std::vector<CorridorGroupInfo>* corridorGroups = nullptr);
+    const std::vector<CorridorGroupInfo>* corridorGroups = nullptr,
+    const FastNeighborhoodIndex* fastNeighborhoodIndex = nullptr);
 
 static void processSchedulingMessage(
     json payload,
@@ -2631,7 +2696,8 @@ static void processSchedulingMessage(
     TrafficDebugManager& trafficDebug,
     const std::string& serviceName,
     int resolvedAheadMs,
-    int resolvedDetourMm) {
+    int resolvedDetourMm,
+    const FastNeighborhoodIndex* fastNeighborhoodIndex) {
     SchedulingRequest req;
     json j = std::move(payload);
     req.messageId = read_string(j, "schedulingRequestId", "");
@@ -3181,9 +3247,11 @@ static void processSchedulingMessage(
             build_traffic_path_payload(req.messageId, mapId.load(), robotRepo, mapInfo, taskPriorityById,
                                        mapReadyNow, staticTableReady, skipStaticTable, staticTable,
                                        aStarPtr.get(), nodeReservations);
-        std::string trafficPayloadStr = trafficPayload.dump();
-        trafficPathPublisher.publishPayload(trafficPayloadStr);
-        trafficDebug.onPublish(trafficPayload, trafficPayloadStr, "allocation");
+        publish_traffic_payload_if_changed("allocation",
+                                           trafficPayload,
+                                           robotRepo,
+                                           trafficPathPublisher,
+                                           trafficDebug);
         if (trail_send_on_allocation(g_trailVersion)) {
             publish_trail_for_all_plans(
                 req.messageId,
@@ -3815,7 +3883,10 @@ static void processSchedulingMessage(
 	                            reserveBudgetOverride,
 	                            true,
 	                            ReplanStage::NONE,
-	                            nullptr);
+	                            nullptr,
+                                nullptr,
+                                nullptr,
+                                fastNeighborhoodIndex);
 	                        robotRepo.updateDynamicPlan(plan.amrId, planned, planEntryOpt->pathId, reserveBudgetOverride);
 	                    }
 	                }
@@ -3825,9 +3896,11 @@ static void processSchedulingMessage(
             build_traffic_path_payload(req.messageId, mapId.load(), robotRepo, mapInfo, taskPriorityById,
                                        mapReadyNow, staticTableReady, skipStaticTable, staticTable,
                                        aStarPtr.get(), nodeReservations);
-        std::string trafficPayloadStr = trafficPayload.dump();
-        trafficPathPublisher.publishPayload(trafficPayloadStr);
-        trafficDebug.onPublish(trafficPayload, trafficPayloadStr, "allocation");
+        publish_traffic_payload_if_changed("allocation",
+                                           trafficPayload,
+                                           robotRepo,
+                                           trafficPathPublisher,
+                                           trafficDebug);
         if (trail_send_on_allocation(g_trailVersion)) {
             publish_trail_for_all_plans(
                 req.messageId,
@@ -3989,6 +4062,7 @@ static const char* hold_reason_label(NodeReservationTable::HoldReason reason) {
         case NodeReservationTable::HoldReason::RESERVED_PATH: return "reserved_path";
         case NodeReservationTable::HoldReason::WAITING_POINT: return "waiting_point";
         case NodeReservationTable::HoldReason::TEMP_GOAL: return "temp_goal";
+        case NodeReservationTable::HoldReason::PRE_RESERVATION: return "pre_reservation";
         default: return "other";
     }
 }
@@ -4569,14 +4643,126 @@ static std::vector<int> parse_env_node_list(const char* raw) {
     return out;
 }
 
+static std::uint64_t make_node_pair_key(int fromNodeId, int toNodeId) {
+    const auto hi = static_cast<std::uint64_t>(static_cast<std::uint32_t>(fromNodeId));
+    const auto lo = static_cast<std::uint64_t>(static_cast<std::uint32_t>(toNodeId));
+    return (hi << 32) | lo;
+}
+
+static std::uint64_t make_undirected_node_pair_key(int nodeA, int nodeB) {
+    if (nodeA > nodeB) std::swap(nodeA, nodeB);
+    return make_node_pair_key(nodeA, nodeB);
+}
+
 static double distance_mm_between_nodes(const MapInfo& mapInfo, int fromNodeId, int toNodeId) {
     try {
+        const auto& id2idx = mapInfo.getId2Index();
+        auto itFrom = id2idx.find(fromNodeId);
+        auto itTo = id2idx.find(toNodeId);
+        if (itFrom != id2idx.end() && itTo != id2idx.end()) {
+            if (const Edge* edge = mapInfo.getEdge(itFrom->second, itTo->second)) {
+                if (std::isfinite(edge->weight) && edge->weight > 0.0) {
+                    return edge->weight;
+                }
+            }
+        }
         const Node& from = mapInfo.getNodeById(fromNodeId);
         const Node& to = mapInfo.getNodeById(toNodeId);
         return std::hypot(to.x - from.x, to.y - from.y);
     } catch (...) {
         return 0.0;
     }
+}
+
+static FastNeighborhoodIndex build_fast_neighborhood_index(const MapInfo& mapInfo, double thresholdMm) {
+    FastNeighborhoodIndex index;
+    if (!(std::isfinite(thresholdMm) && thresholdMm > 0.0)) {
+        return index;
+    }
+    index.thresholdMm = thresholdMm;
+
+    std::unordered_map<int, std::vector<std::pair<int, double>>> adjacency;
+    const auto& edges = mapInfo.getEdges();
+    adjacency.reserve(edges.size());
+    for (const auto& edge : edges) {
+        if (edge.startNodeId < 0 || edge.endNodeId < 0) continue;
+        double weight = edge.weight;
+        if (!(std::isfinite(weight) && weight > 0.0)) {
+            weight = distance_mm_between_nodes(mapInfo, edge.startNodeId, edge.endNodeId);
+        }
+        if (!(std::isfinite(weight) && weight > 0.0)) continue;
+        adjacency[edge.startNodeId].push_back({edge.endNodeId, weight});
+        adjacency[edge.endNodeId].push_back({edge.startNodeId, weight});
+        index.graphDistanceMmByPair[make_undirected_node_pair_key(edge.startNodeId, edge.endNodeId)] = weight;
+    }
+
+    const auto& nodes = mapInfo.getNodes();
+    index.nodeIdsByNodeId.reserve(nodes.size());
+    for (const auto& node : nodes) {
+        if (node.id < 0) continue;
+        std::unordered_map<int, double> bestDistanceByNode;
+        std::vector<std::pair<int, double>> stack;
+        bestDistanceByNode.reserve(32);
+        stack.reserve(32);
+        bestDistanceByNode[node.id] = 0.0;
+        stack.push_back({node.id, 0.0});
+
+        while (!stack.empty()) {
+            auto [currentNodeId, currentDistMm] = stack.back();
+            stack.pop_back();
+            auto adjIt = adjacency.find(currentNodeId);
+            if (adjIt == adjacency.end()) continue;
+            for (const auto& edgeInfo : adjIt->second) {
+                const int nextNodeId = edgeInfo.first;
+                const double nextDistMm = currentDistMm + edgeInfo.second;
+                if (nextDistMm > thresholdMm + 1e-6) continue;
+                auto bestIt = bestDistanceByNode.find(nextNodeId);
+                if (bestIt != bestDistanceByNode.end() && bestIt->second <= nextDistMm + 1e-6) {
+                    continue;
+                }
+                bestDistanceByNode[nextNodeId] = nextDistMm;
+                stack.push_back({nextNodeId, nextDistMm});
+            }
+        }
+
+        std::vector<std::pair<int, double>> withinThreshold;
+        withinThreshold.reserve(bestDistanceByNode.size());
+        for (const auto& kv : bestDistanceByNode) {
+            if (kv.second < 0.0 || kv.second > thresholdMm + 1e-6) continue;
+            withinThreshold.push_back(kv);
+            index.graphDistanceMmByPair[make_undirected_node_pair_key(node.id, kv.first)] = kv.second;
+        }
+        std::sort(withinThreshold.begin(), withinThreshold.end(), [](const auto& a, const auto& b) {
+            if (std::abs(a.second - b.second) > 1e-6) return a.second < b.second;
+            return a.first < b.first;
+        });
+
+        std::vector<int> neighborhoodNodes;
+        neighborhoodNodes.reserve(withinThreshold.size());
+        for (const auto& item : withinThreshold) {
+            neighborhoodNodes.push_back(item.first);
+        }
+        index.nodeIdsByNodeId[node.id] = std::move(neighborhoodNodes);
+    }
+
+    return index;
+}
+
+static std::vector<int> expand_nodes_with_fast_neighborhood(const FastNeighborhoodIndex& index,
+                                                            const std::vector<int>& nodeIds) {
+    std::vector<int> out;
+    out.reserve(nodeIds.size() * 2);
+    for (int nodeId : nodeIds) {
+        auto it = index.nodeIdsByNodeId.find(nodeId);
+        if (it == index.nodeIdsByNodeId.end() || it->second.empty()) {
+            out.push_back(nodeId);
+            continue;
+        }
+        out.insert(out.end(), it->second.begin(), it->second.end());
+    }
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
 }
 
 static double compute_route_distance_mm(const MapInfo& mapInfo, const std::vector<int>& route) {
@@ -4586,6 +4772,25 @@ static double compute_route_distance_mm(const MapInfo& mapInfo, const std::vecto
         dist += distance_mm_between_nodes(mapInfo, route[i], route[i + 1]);
     }
     return dist;
+}
+
+static double compute_route_astar_travel_cost_mm(const MapInfo& mapInfo, const std::vector<int>& route) {
+    if (route.size() < 2) return 0.0;
+    double travelMm = 0.0;
+    for (size_t i = 0; i + 1 < route.size(); ++i) {
+        try {
+            const Node& from = mapInfo.getNodeById(route[i]);
+            const Node& to = mapInfo.getNodeById(route[i + 1]);
+            travelMm += std::hypot(to.x - from.x, to.y - from.y);
+        } catch (...) {
+            travelMm += distance_mm_between_nodes(mapInfo, route[i], route[i + 1]);
+        }
+    }
+    travelMm += PathPlanningConstants::calculatePathTurnPenaltyByNodeIds(
+        route,
+        mapInfo,
+        PathPlanningConstants::resolveTurnPenaltyMm());
+    return travelMm;
 }
 
 static std::vector<int> build_route_from_plan(const PathPlanningHelper::AmrPlanInfo& plan);
@@ -6650,7 +6855,8 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
     ReplanStage stage,
     bool* updatedOut,
     bool* usedTempGoalOut,
-    const std::vector<CorridorGroupInfo>* corridorGroups) {
+    const std::vector<CorridorGroupInfo>* corridorGroups,
+    const FastNeighborhoodIndex* fastNeighborhoodIndex) {
     PathPlanningHelper::AmrPlanInfo out;
     out.amrId = deviceId;
     out.startNodeId = startNodeId;
@@ -6967,9 +7173,10 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
     // - major replan (allowLongerRoute==true): treat held nodes as hard obstacles to seek a feasible detour.
     const bool avoidHeldNodesInPlanning = allowLongerRoute;
 
-    // Build blocked nodes snapshot (other AGVs, expanded by near-conflict rule). We only inject them as A* banned nodes when
-    // avoidHeldNodesInPlanning==true; otherwise we plan freely and rely on non-preemptive reserve.
-    auto blockedVec = reservations.snapshotBlockedNodes(deviceId);
+    // Formal reservations are exact-node resources. FAST may additionally expand them by a
+    // precomputed neighborhood index, while MAJOR/SUPER treat others' exact reservations as
+    // hard A* obstacles directly.
+    auto blockedVec = reservations.snapshotHeldNodes(deviceId);
     std::unordered_set<int> bannedNodes;
     bannedNodes.reserve(blockedVec.size());
     std::unordered_set<int> bannedNodesAll;
@@ -6979,6 +7186,13 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
         if (avoidHeldNodesInPlanning) {
             bannedNodes.insert(nodeId);
         }
+    }
+    std::vector<int> fastNeighborhoodBlockedVec;
+    if (stage == ReplanStage::FAST &&
+        fastNeighborhoodIndex != nullptr &&
+        fastNeighborhoodIndex->thresholdMm > 0.0 &&
+        !blockedVec.empty()) {
+        fastNeighborhoodBlockedVec = expand_nodes_with_fast_neighborhood(*fastNeighborhoodIndex, blockedVec);
     }
     std::unordered_set<int> tempBlockedNodes;
     tempBlockedNodes.reserve(rt.tempBlockedNodes.size());
@@ -7517,19 +7731,12 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
     congestionNodes.insert(congestion.hotNodes.begin(), congestion.hotNodes.end());
     const double tempLowScore = std::max(0.0, getenv_double("CONGESTION_TEMP_LOW_SCORE", 0.0));
     const double aStarPenaltyMm = std::max(0.0, getenv_double("CONGESTION_ASTAR_PENALTY_MM", 2000.0));
-    const int fastHeldPenaltyMs = std::max(0, getenv_int("REPLAN_FAST_HELD_PENALTY_MS", 1000));
-    std::unordered_map<int, double> fastHeldPenaltyScore;
-    double fastHeldPenaltyMm = 0.0;
-    if (stage == ReplanStage::FAST &&
-        fastHeldPenaltyMs > 0 &&
-        !blockedVec.empty() &&
-        !enableSoftTimeWindow) {
-        double speed = mapInfo.getGlobalMaxSpeed();
-        if (!(speed > 0.0)) speed = 1000.0;
-        fastHeldPenaltyMm = speed * (static_cast<double>(fastHeldPenaltyMs) / 1000.0);
-        fastHeldPenaltyScore.reserve(blockedVec.size());
-        for (int nodeId : blockedVec) {
-            fastHeldPenaltyScore[nodeId] = 1.0;
+    if (!fastNeighborhoodBlockedVec.empty()) {
+        for (int nodeId : fastNeighborhoodBlockedVec) {
+            if (nodeId != startNodeId) {
+                congestion.hardBlocked.insert(nodeId);
+            }
+            congestionNodes.insert(nodeId);
         }
     }
     const bool stuckHere = false;
@@ -7548,6 +7755,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
                   << " staticMs=" << statusStaticMs
                   << " avoidHeld=" << (avoidHeldNodesInPlanning ? "1" : "0")
                   << " heldCount=" << bannedNodesAll.size()
+                  << " fastNeighborhoodHard=" << fastNeighborhoodBlockedVec.size()
                   << " bannedCount=" << bannedNodes.size()
                   << " congHard=" << congestion.hardBlocked.size()
                   << " congHot=" << congestion.hotNodes.size()
@@ -7636,8 +7844,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
             !softTimeWindows.empty() &&
             !avoidHeldNodesInPlanning &&
             !overrideBanned;
-        const bool useFastHeldPenalty = !fastHeldPenaltyScore.empty();
-        if (useSoftTimePenalty || useFastHeldPenalty) {
+        if (useSoftTimePenalty) {
             dynamicPenaltyFn =
                 [&](int prevNodeId, int nodeId, double arrivalCostMm) -> double {
                     double penalty = 0.0;
@@ -7651,13 +7858,6 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
                             arrivalCostMm / nominalSpeed,
                             goalServiceSec,
                             nominalSpeed);
-                    }
-                    if (useFastHeldPenalty) {
-                        auto itPenalty = fastHeldPenaltyScore.find(nodeId);
-                        if (itPenalty != fastHeldPenaltyScore.end()) {
-                            double score = std::clamp(itPenalty->second, 0.0, 1.0);
-                            penalty += fastHeldPenaltyMm * score;
-                        }
                     }
                     return penalty;
                 };
@@ -7740,7 +7940,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
 
     auto estimate_route_to_goal_mm = [&](const std::vector<int>& route, int goalNodeId) -> double {
         if (route.empty()) return -1.0;
-        double dist = compute_route_distance_mm(mapInfo, route);
+        double dist = compute_route_astar_travel_cost_mm(mapInfo, route);
         if (goalNodeId >= 0) {
             int tailStart = route.back();
             if (tailStart != goalNodeId) {
@@ -8272,6 +8472,39 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
         }
     }
 
+    const double fastMaxDetourRatio = std::max(1.0, getenv_double("FAST_MAX_DETOUR_RATIO", 1.8));
+    if (stage == ReplanStage::FAST &&
+        !usingTempGoal &&
+        primaryGoal >= 0 &&
+        plannedRoute.size() >= 2 &&
+        fastMaxDetourRatio > 1.0) {
+        double shortestRouteCostMm = goalDistMm;
+        if (!(shortestRouteCostMm > 0.0)) {
+            shortestRouteCostMm = estimate_goal_distance_mm(mapInfo, startNodeId, primaryGoal, &aStar);
+        }
+        const double plannedRouteCostMm = compute_route_astar_travel_cost_mm(mapInfo, plannedRoute);
+        if (shortestRouteCostMm > 0.0 &&
+            plannedRouteCostMm > shortestRouteCostMm * fastMaxDetourRatio + 1.0) {
+            if (logSummary) {
+                std::cout << log_time_prefix()
+                          << "[FAST] stay-in-place deviceId=" << deviceId
+                          << " start=" << startNodeId
+                          << " goal=" << primaryGoal
+                          << " reason=detour_ratio"
+                          << " plannedCostMm=" << std::llround(plannedRouteCostMm)
+                          << " shortestCostMm=" << std::llround(shortestRouteCostMm)
+                          << " ratio=" << std::fixed << std::setprecision(3)
+                          << (plannedRouteCostMm / shortestRouteCostMm)
+                          << " limit=" << fastMaxDetourRatio
+                          << std::defaultfloat
+                          << std::endl;
+            }
+            if (updatedOut) *updatedOut = false;
+            repo.updateRuntimeState(deviceId, planEntry.pathId, rt);
+            return build_plan_from_reserved(rt.reservedNodes);
+        }
+    }
+
     if (usingTempGoal) {
         std::ostringstream oss;
         oss << "[AroundPath] detour deviceId=" << deviceId
@@ -8307,6 +8540,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
                              ReserveDebugInfo* dbg) -> std::vector<int> {
         if (dbg) *dbg = ReserveDebugInfo{};
         std::vector<int> out;
+        std::vector<int> desiredPreReservations;
         out.reserve(std::min<size_t>(route.size(), static_cast<size_t>(reserveBudget)));
         std::vector<int> routePrefix;
         routePrefix.reserve(std::min<size_t>(route.size(), static_cast<size_t>(reserveBudget)));
@@ -8404,10 +8638,15 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
             }
             std::chrono::milliseconds ttl(ttlMs);
             if (!reservations.tryReserve(nodeId, deviceId, holdReason, holdDetail, ttl)) {
+                auto hold = reservations.findBlockingHold(nodeId, deviceId);
+                if (hold.has_value() &&
+                    hold->ownerAgvId != deviceId &&
+                    hold->reason != NodeReservationTable::HoldReason::PRE_RESERVATION) {
+                    desiredPreReservations.push_back(nodeId);
+                }
                 if (dbg) {
                     dbg->blockedNode = nodeId;
                     dbg->blockedIndex = i;
-                    auto hold = reservations.findBlockingHold(nodeId, deviceId);
                     if (hold.has_value()) {
                         dbg->blockedBy = hold->ownerAgvId;
                         dbg->blockedReason = hold_reason_label(hold->reason);
@@ -8415,7 +8654,6 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
                     }
                 }
                 if (logSummary) {
-                    auto hold = reservations.findBlockingHold(nodeId, deviceId);
                     std::cout << log_time_prefix()
                               << "[Reserve] blocked deviceId=" << deviceId
                               << " node=" << nodeId
@@ -8430,6 +8668,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
             }
             out.push_back(nodeId);
         }
+        reservations.updatePreReservations(deviceId, desiredPreReservations);
         if (out.empty()) {
             reservations.tryReserve(startNodeId, deviceId, NodeReservationTable::HoldReason::WAITING_POINT,
                                     "current", std::chrono::milliseconds(0));
@@ -8530,10 +8769,27 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
             if (updatedOut) *updatedOut = false;
         }
     }
+    if (stage == ReplanStage::FAST &&
+        !usingTempGoal &&
+        plannedRoute.size() >= 2 &&
+        newReserved.size() <= 1) {
+        if (logSummary) {
+            std::cout << log_time_prefix()
+                      << "[FAST] stay-in-place deviceId=" << deviceId
+                      << " start=" << startNodeId
+                      << " goal=" << selectedGoal
+                      << " reason=blocked_after_reserve"
+                      << std::endl;
+        }
+        if (updatedOut) *updatedOut = false;
+        repo.updateRuntimeState(deviceId, planEntry.pathId, rt);
+        return build_plan_from_reserved(rt.reservedNodes);
+    }
     const bool firstHopWaitOk = (firstHopWaitMs <= 0) || (statusStaticNow && statusStaticMs >= firstHopWaitMs);
     // If we failed to reserve even the first hop (window shrinks to 1 node), try to pick an
     // alternative neighbor as the next step so the robot can keep moving and break gridlocks.
-    if (firstHopEnabled && firstHopWaitOk && newReserved.size() <= 1 && plannedRoute.size() >= 2 &&
+    if (stage != ReplanStage::FAST &&
+        firstHopEnabled && firstHopWaitOk && newReserved.size() <= 1 && plannedRoute.size() >= 2 &&
         plannedRoute[1] != startNodeId && committedPrefix.size() <= 1 &&
         selectedGoal >= 0) {
         std::vector<int> neighbors;
@@ -8724,7 +8980,8 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_with_throttle(
     int reserveBudgetOverride,
     int minIntervalMs,
     bool* usedCacheOut,
-    const std::vector<CorridorGroupInfo>* corridorGroups = nullptr) {
+    const std::vector<CorridorGroupInfo>* corridorGroups = nullptr,
+    const FastNeighborhoodIndex* fastNeighborhoodIndex = nullptr) {
     if (usedCacheOut) *usedCacheOut = false;
     int baseIntervalMs = (minIntervalMs > 0) ? minIntervalMs : 200;
     int effectiveIntervalMs = baseIntervalMs;
@@ -8778,7 +9035,8 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_with_throttle(
         stage,
         &planUpdated,
         &usedTempGoal,
-        corridorGroups);
+        corridorGroups,
+        fastNeighborhoodIndex);
     if (effectiveIntervalMs > 0) {
         if (planUpdated) {
             bool refreshClock = (stage != ReplanStage::FAST) || usedTempGoal;
@@ -10120,14 +10378,21 @@ static void handle_config_infos_multimap(const json& j,
     }
 }
 
-static double reserve_near_conflict_threshold_mm() {
-    double thresholdMm = getenv_double("RESERVE_NEAR_CONFLICT_MM", -1.0);
+static double fast_neighborhood_threshold_mm() {
+    double thresholdMm = getenv_double("FAST_NEIGHBORHOOD_MM", -1.0);
     if (std::isfinite(thresholdMm) && thresholdMm >= 0.0) {
         return thresholdMm;
     }
-    double thresholdM = getenv_double("RESERVE_NEAR_CONFLICT_M", 0.49);
+    thresholdMm = getenv_double("RESERVE_NEAR_CONFLICT_MM", -1.0);
+    if (std::isfinite(thresholdMm) && thresholdMm >= 0.0) {
+        return thresholdMm;
+    }
+    double thresholdM = getenv_double("FAST_NEIGHBORHOOD_M", -1.0);
     if (!std::isfinite(thresholdM) || thresholdM < 0.0) {
-        thresholdM = 0.49;
+        thresholdM = getenv_double("RESERVE_NEAR_CONFLICT_M", 3.0);
+    }
+    if (!std::isfinite(thresholdM) || thresholdM < 0.0) {
+        thresholdM = 3.0;
     }
     return thresholdM * 1000.0;
 }
@@ -10138,7 +10403,8 @@ static bool handle_map_info(const json& j,
                             NodeReservationTable& reservations,
                             std::unique_ptr<AStarPathFinder>& aStarPtr,
                             const std::string& cachePath,
-                            std::atomic<int>& mapId) {
+                            std::atomic<int>& mapId,
+                            FastNeighborhoodIndex* fastNeighborhoodIndex) {
     auto read_int_field = [](const json& obj, const char* key, int def) -> int {
         auto it = obj.find(key);
         if (it == obj.end() || it->is_null()) return def;
@@ -10212,8 +10478,11 @@ static bool handle_map_info(const json& j,
         parser.parseMapDocument(*mapBlob, nodes, edges, areas, maxv);
         mapInfo.loadNodes(nodes, areas, maxv);
         mapInfo.loadEdges(edges);
-        const double nearConflictThresholdMm = std::max(0.0, reserve_near_conflict_threshold_mm());
-        reservations.configureDistanceConflict(mapInfo, nearConflictThresholdMm);
+        reservations.configureDistanceConflict(mapInfo, 0.0);
+        const double neighborhoodThresholdMm = std::max(0.0, fast_neighborhood_threshold_mm());
+        if (fastNeighborhoodIndex) {
+            *fastNeighborhoodIndex = build_fast_neighborhood_index(mapInfo, neighborhoodThresholdMm);
+        }
         aStarPtr.reset(new AStarPathFinder(mapInfo));
         if (!cachePath.empty()) {
             try {
@@ -10236,7 +10505,7 @@ static bool handle_map_info(const json& j,
         if (startupSummary) {
             std::cout << "[Map] map info updated, nodes=" << nodes.size()
                       << " edges=" << edges.size()
-                      << " reserveNearConflictMm=" << nearConflictThresholdMm
+                      << " fastNeighborhoodMm=" << neighborhoodThresholdMm
                       << std::endl;
         }
         if (hasMapId) {
@@ -11580,13 +11849,13 @@ int main() {
                             ctx->staticTable,
                             ctx->aStarPtr.get(),
                             ctx->nodeReservations);
-                        if (!ctx->mapVersion.empty()) {
-                            payload["mapVersion"] = ctx->mapVersion;
-                        }
+                        attach_map_metadata(payload, *ctx);
                     }
-                    std::string payloadStr = payload.dump();
-                    tickerPublisher.publishPayload(payloadStr);
-                    trafficDebug.onPublish(payload, payloadStr, "periodic");
+                    publish_traffic_payload_if_changed("periodic",
+                                                       payload,
+                                                       ctx->robotRepo,
+                                                       tickerPublisher,
+                                                       trafficDebug);
                 }
                 int stepMs = 50;
                 int steps = std::max(1, intervalMs / stepMs);
@@ -11625,6 +11894,13 @@ int main() {
                 std::vector<std::tuple<std::shared_ptr<MapRuntimeContext>, std::string, PlanCacheEntry>> tasks;
                 for (const auto& ctx : contexts) {
                     auto planSnapshots = ctx->robotRepo.snapshotPlans();
+                    std::stable_sort(planSnapshots.begin(), planSnapshots.end(),
+                                     [&](const auto& a, const auto& b) {
+                                         const bool aHasPre = ctx->nodeReservations.ownerHasPreReservations(a.first);
+                                         const bool bHasPre = ctx->nodeReservations.ownerHasPreReservations(b.first);
+                                         if (aHasPre != bHasPre) return aHasPre > bHasPre;
+                                         return device_id_less(a.first, b.first);
+                                     });
                     std::unordered_map<std::string, PlanCacheEntry> planByDevice;
                     planByDevice.reserve(planSnapshots.size());
                     for (const auto& kv : planSnapshots) {
@@ -11694,7 +11970,8 @@ int main() {
                                     reserveBudgetOverride,
                                     baseIntervalMs,
                                     nullptr,
-                                    ctx->corridorGroups.empty() ? nullptr : &ctx->corridorGroups);
+                                    ctx->corridorGroups.empty() ? nullptr : &ctx->corridorGroups,
+                                    &ctx->fastNeighborhoodIndex);
                             }
                             if (profileSummary) {
                                 const auto jobMs = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -11760,7 +12037,8 @@ int main() {
                                                     reserveBudgetOverride,
                                                     baseIntervalMs,
                                                     nullptr,
-                                                    ctx->corridorGroups.empty() ? nullptr : &ctx->corridorGroups);
+                                                    ctx->corridorGroups.empty() ? nullptr : &ctx->corridorGroups,
+                                                    &ctx->fastNeighborhoodIndex);
                                             }
                                         }
                                     }
@@ -12413,7 +12691,8 @@ int main() {
                     ReplanStage::NONE,
                     &dynamicUpdated,
                     &usedTempGoal,
-                    ctx->corridorGroups.empty() ? nullptr : &ctx->corridorGroups);
+                    ctx->corridorGroups.empty() ? nullptr : &ctx->corridorGroups,
+                    &ctx->fastNeighborhoodIndex);
                 ctx->robotRepo.updateDynamicPlan(
                     deviceId,
                     dynamicPlan,
@@ -12428,9 +12707,11 @@ int main() {
                                                    ctx->mapReady.load(), ctx->staticTableReady, ctx->skipStaticTable, ctx->staticTable,
                                                    ctx->aStarPtr.get(), ctx->nodeReservations);
                     attach_map_metadata(trafficPayload, *ctx);
-                    std::string trafficPayloadStr = trafficPayload.dump();
-                    trafficPathPublisher.publishPayload(trafficPayloadStr);
-                    trafficDebug.onPublish(trafficPayload, trafficPayloadStr, "replan");
+                    publish_traffic_payload_if_changed("replan",
+                                                       trafficPayload,
+                                                       ctx->robotRepo,
+                                                       trafficPathPublisher,
+                                                       trafficDebug);
                     const bool logSummary = env_enabled("RECEIVER_LOG_ROUTE_SUMMARY") || env_enabled("RECEIVER_LOG_ROUTE_DETAIL");
                     const bool logDetail = env_enabled("RECEIVER_LOG_ROUTE_DETAIL");
                     auto latestPlanOpt = ctx->robotRepo.getPlan(deviceId);
@@ -12752,7 +13033,8 @@ int main() {
                                         ctx->mapReady, ctx->activeMapId, ctx->aStarPtr,
                                         ctx->staticTable, ctx->staticTableReady, ctx->skipStaticTable,
                                         resultPublisher, algoPublisher, trafficPathPublisher, trafficDebug, serviceName,
-                                        resolvedAheadMs, resolvedDetourMm);
+                                        resolvedAheadMs, resolvedDetourMm,
+                                        &ctx->fastNeighborhoodIndex);
                                 } catch (const std::exception& ex) {
                                     std::cerr << "[SchedulingWorker] job exception: " << ex.what() << std::endl;
                                 } catch (...) {

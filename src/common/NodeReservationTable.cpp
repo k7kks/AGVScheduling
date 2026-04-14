@@ -15,6 +15,35 @@ static bool keep_group_key(const std::vector<std::string>& keys, const std::stri
 
 }  // namespace
 
+void NodeReservationTable::erasePreReservationNodeLocked(int nodeId, const std::string& ownerAgvId) {
+    if (nodeId < 0 || ownerAgvId.empty()) return;
+    auto it = preReservationEntries_.find(nodeId);
+    if (it != preReservationEntries_.end() && it->second.ownerAgvId == ownerAgvId) {
+        preReservationEntries_.erase(it);
+    }
+    auto ownerIt = preReservationNodesByOwner_.find(ownerAgvId);
+    if (ownerIt == preReservationNodesByOwner_.end()) return;
+    auto& nodes = ownerIt->second;
+    nodes.erase(std::remove(nodes.begin(), nodes.end(), nodeId), nodes.end());
+    if (nodes.empty()) {
+        preReservationNodesByOwner_.erase(ownerIt);
+    }
+}
+
+void NodeReservationTable::clearPreReservationsByOwnerLocked(const std::string& ownerAgvId) {
+    if (ownerAgvId.empty()) return;
+    auto ownerIt = preReservationNodesByOwner_.find(ownerAgvId);
+    if (ownerIt == preReservationNodesByOwner_.end()) return;
+    const std::vector<int> nodes = ownerIt->second;
+    preReservationNodesByOwner_.erase(ownerIt);
+    for (int nodeId : nodes) {
+        auto it = preReservationEntries_.find(nodeId);
+        if (it != preReservationEntries_.end() && it->second.ownerAgvId == ownerAgvId) {
+            preReservationEntries_.erase(it);
+        }
+    }
+}
+
 void NodeReservationTable::configureDistanceConflict(const MapInfo& mapInfo, double thresholdMm) {
     DistanceConflictIndex nextIndex;
     if (std::isfinite(thresholdMm) && thresholdMm > 0.0) {
@@ -149,6 +178,12 @@ bool NodeReservationTable::tryReserve(int nodeId,
         }
     }
 
+    std::unique_lock<std::shared_mutex> preLk(preReservationMutex_);
+    auto preIt = preReservationEntries_.find(nodeId);
+    if (preIt != preReservationEntries_.end() && preIt->second.ownerAgvId != ownerAgvId) {
+        return false;
+    }
+
     auto& targetEntries = shards_[shardOf(nodeId)].entries;
     auto it = targetEntries.find(nodeId);
     if (it == targetEntries.end()) {
@@ -159,6 +194,7 @@ bool NodeReservationTable::tryReserve(int nodeId,
         e.updatedAt = now;
         e.expiresAt = expiresAt;
         targetEntries.emplace(nodeId, std::move(e));
+        erasePreReservationNodeLocked(nodeId, ownerAgvId);
         return true;
     }
 
@@ -166,7 +202,81 @@ bool NodeReservationTable::tryReserve(int nodeId,
     it->second.detail = detail;
     it->second.updatedAt = now;
     it->second.expiresAt = expiresAt;
+    erasePreReservationNodeLocked(nodeId, ownerAgvId);
     return true;
+}
+
+void NodeReservationTable::updatePreReservations(const std::string& ownerAgvId,
+                                                 const std::vector<int>& nodeIds) {
+    if (ownerAgvId.empty()) return;
+    std::vector<int> desired = nodeIds;
+    desired.erase(std::remove_if(desired.begin(), desired.end(), [](int nodeId) {
+        return nodeId < 0;
+    }), desired.end());
+    std::sort(desired.begin(), desired.end());
+    desired.erase(std::unique(desired.begin(), desired.end()), desired.end());
+
+    std::unique_lock<std::shared_mutex> lk(preReservationMutex_);
+    std::vector<int> old;
+    auto oldIt = preReservationNodesByOwner_.find(ownerAgvId);
+    if (oldIt != preReservationNodesByOwner_.end()) {
+        old = oldIt->second;
+    }
+    if (old == desired) {
+        const auto now = std::chrono::steady_clock::now();
+        for (int nodeId : desired) {
+            auto it = preReservationEntries_.find(nodeId);
+            if (it != preReservationEntries_.end() && it->second.ownerAgvId == ownerAgvId) {
+                it->second.updatedAt = now;
+            }
+        }
+        return;
+    }
+
+    clearPreReservationsByOwnerLocked(ownerAgvId);
+    if (desired.empty()) return;
+
+    const auto now = std::chrono::steady_clock::now();
+    std::vector<int> accepted;
+    accepted.reserve(desired.size());
+    for (int nodeId : desired) {
+        auto [it, inserted] = preReservationEntries_.try_emplace(nodeId);
+        if (!inserted && it->second.ownerAgvId != ownerAgvId) {
+            continue;
+        }
+        it->second.ownerAgvId = ownerAgvId;
+        it->second.updatedAt = now;
+        accepted.push_back(nodeId);
+    }
+    if (!accepted.empty()) {
+        preReservationNodesByOwner_[ownerAgvId] = std::move(accepted);
+    }
+}
+
+void NodeReservationTable::clearPreReservationsByOwner(const std::string& ownerAgvId) {
+    if (ownerAgvId.empty()) return;
+    std::unique_lock<std::shared_mutex> lk(preReservationMutex_);
+    clearPreReservationsByOwnerLocked(ownerAgvId);
+}
+
+bool NodeReservationTable::ownerHasPreReservations(const std::string& ownerAgvId) const {
+    if (ownerAgvId.empty()) return false;
+    std::shared_lock<std::shared_mutex> lk(preReservationMutex_);
+    auto it = preReservationNodesByOwner_.find(ownerAgvId);
+    return it != preReservationNodesByOwner_.end() && !it->second.empty();
+}
+
+std::optional<NodeReservationTable::PreReservationEntry>
+NodeReservationTable::getPreReservation(int nodeId) const {
+    if (nodeId < 0) return std::nullopt;
+    std::shared_lock<std::shared_mutex> lk(preReservationMutex_);
+    auto it = preReservationEntries_.find(nodeId);
+    if (it == preReservationEntries_.end() || it->second.ownerAgvId.empty()) return std::nullopt;
+    PreReservationEntry entry;
+    entry.nodeId = nodeId;
+    entry.ownerAgvId = it->second.ownerAgvId;
+    entry.updatedAt = it->second.updatedAt;
+    return entry;
 }
 
 void NodeReservationTable::release(int nodeId, const std::string& ownerAgvId) {
@@ -197,6 +307,7 @@ void NodeReservationTable::releaseAllByOwner(const std::string& ownerAgvId) {
             }
         }
     }
+    clearPreReservationsByOwner(ownerAgvId);
     releaseAllDirectionalGroupsByOwner(ownerAgvId);
 }
 
@@ -337,6 +448,20 @@ std::optional<NodeReservationTable::HoldEntry> NodeReservationTable::findBlockin
         out.detail = it->second.detail;
         out.updatedAt = it->second.updatedAt;
         out.expiresAt = it->second.expiresAt;
+        return out;
+    }
+    std::shared_lock<std::shared_mutex> preLk(preReservationMutex_);
+    auto preIt = preReservationEntries_.find(nodeId);
+    if (preIt != preReservationEntries_.end() &&
+        !preIt->second.ownerAgvId.empty() &&
+        (excludeOwnerAgvId.empty() || preIt->second.ownerAgvId != excludeOwnerAgvId)) {
+        HoldEntry out;
+        out.nodeId = nodeId;
+        out.ownerAgvId = preIt->second.ownerAgvId;
+        out.reason = HoldReason::PRE_RESERVATION;
+        out.detail = "pre_reserved";
+        out.updatedAt = preIt->second.updatedAt;
+        out.expiresAt = std::chrono::steady_clock::time_point{};
         return out;
     }
     return std::nullopt;
@@ -552,6 +677,28 @@ void NodeReservationTable::cleanupExpired() {
         for (auto it = shard.entries.begin(); it != shard.entries.end();) {
             if (isExpired(it->second, now)) {
                 it = shard.entries.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    {
+        std::unique_lock<std::shared_mutex> lk(preReservationMutex_);
+        for (auto it = preReservationEntries_.begin(); it != preReservationEntries_.end();) {
+            if (it->second.ownerAgvId.empty()) {
+                it = preReservationEntries_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        for (auto it = preReservationNodesByOwner_.begin(); it != preReservationNodesByOwner_.end();) {
+            auto& nodes = it->second;
+            nodes.erase(std::remove_if(nodes.begin(), nodes.end(), [&](int nodeId) {
+                auto pit = preReservationEntries_.find(nodeId);
+                return pit == preReservationEntries_.end() || pit->second.ownerAgvId != it->first;
+            }), nodes.end());
+            if (nodes.empty()) {
+                it = preReservationNodesByOwner_.erase(it);
             } else {
                 ++it;
             }

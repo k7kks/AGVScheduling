@@ -6,6 +6,9 @@ set -euo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
+# 自动 export 配置文件里的赋值，避免“文件里配了但子进程收不到”。
+set -a
+
 # 如果存在网络相关环境配置，则加载
 if [[ -f "${ROOT_DIR}/config/network.env" ]]; then
   # shellcheck disable=SC1091
@@ -16,9 +19,12 @@ if [[ -f "${ROOT_DIR}/settings/production.env" ]]; then
   # shellcheck disable=SC1091
   source "${ROOT_DIR}/settings/production.env"
 else
+  set +a
   echo "[start] missing ${ROOT_DIR}/settings/production.env" >&2
   exit 2
 fi
+
+set +a
 
 # Receiver log switches (default OFF; use START_DEBUG=1 to enable summaries).
 START_DEBUG="${START_DEBUG:-0}"
@@ -89,56 +95,13 @@ ln -sf "${LOG_FILE}" "${DEBUG_DIR}/external_receiver_latest.log" 2>/dev/null || 
 if [[ ! -v RESULT_DUMP_DIR ]]; then
   RESULT_DUMP_DIR=""
 fi
-if [[ ! -v MAP_CACHE_FILE ]]; then
+if [[ -z "${MAP_CACHE_FILE:-}" ]]; then
   MAP_CACHE_FILE="${DEBUG_DIR}/received_map.json"
 fi
 
-export LOG_LEVEL
-export LOG_STATUS_INTERVAL_SEC
-export EXT_TIMEOUT_SEC
-export PURGE_MQ_ON_START
-export OBSTACLE_BLOCK_NODE_MM
-export OBSTACLE_BLOCK_EDGE_MM
-export DEBUG_INCLUDE_PATH_RESULT
-export TS_MAX_SKEW_SEC
-export SKIP_STATIC_TABLE
-export PLANNER_STATIC_TABLE
+export DEBUG_DIR
 export RESULT_DUMP_DIR
-export RESULT_DUMP_KEEP_MAX
 export TRAFFIC_DUMP_KEEP_MAX
-export CONGESTION_REGION_COUNT
-export TRAIL_MAX_POINTS
-export RESERVE_TTL_MS
-export RESERVE_COMMITTED_TTL_MS
-export STATUS_STALE_RELEASE_MS
-export USE_STATUS_NEXT_NODE
-export STATUS_IDLE_RELEASE_ENABLE
-export TRAFFIC_PATH_PUBLISH_INTERVAL_MS
-export TRAFFIC_PATH_SEND_GROWING
-export REPLAN_INTERVAL_MS
-export REPLAN_INTERVAL_MIN_MS
-export REPLAN_INTERVAL_MAX_MS
-export REPLAN_NEAR_GOAL_MM
-export REPLAN_NEAR_GOAL_CHECK
-export REPLAN_TICK_MS
-export REPLAN_MAJOR_STUCK_MS
-export REPLAN_SUPER_AFTER_MAJOR_FAILS
-export STATUS_STATIC_SPEED_EPS
-export STATUS_STATIC_RELEASE_MS
-export TRAFFIC_PATH_LINE_LOG_ENABLE
-export PLANNER_TURN_PENALTY_MM
-export PLANNER_TURN_PENALTY_RETRY_RATIO
-export PLANNER_TURN_PENALTY_LAST_RESORT_MM
-export CONGESTION_REGION_BRIDGE_MIN_NODES
-export ALLOC_TASK_AGE_THRESHOLD_SEC
-export ALLOC_TASK_AGE_BONUS_MS_PER_SEC
-export ALLOC_TASK_AGE_BONUS_MAX_MS
-export ALLOC_TASK_AGE_MIN_COST_MS
-export ALLOC_CONGESTION_PENALTY_RATIO
-export ALLOC_WAIT_PENALTY_COEFF
-export ALLOC_TOPK_RATIO
-export ALLOC_MAX_BATCH_SIZE
-export REPLAN_FAST_HELD_PENALTY_MS
 export MAP_CACHE_FILE
 
 # 可用时优先使用可执行的编译产物目录

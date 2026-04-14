@@ -20,6 +20,7 @@ public:
         RESERVED_PATH = 0,   // Reserved as part of a planned path window
         WAITING_POINT = 1,   // AGV is waiting on this node
         TEMP_GOAL = 2,       // Temporary goal for deadlock relief
+        PRE_RESERVATION = 3, // Synthetic blocker for a queued pre-reservation priority
         OTHER = 99
     };
 
@@ -42,6 +43,12 @@ public:
         std::chrono::steady_clock::time_point expiresAt{};
     };
 
+    struct PreReservationEntry {
+        int nodeId = -1;
+        std::string ownerAgvId;
+        std::chrono::steady_clock::time_point updatedAt{};
+    };
+
     NodeReservationTable() = default;
 
     // Configure distance-based conflict groups from current map.
@@ -56,6 +63,19 @@ public:
                     HoldReason reason,
                     const std::string& detail = {},
                     std::chrono::milliseconds ttl = std::chrono::milliseconds(0));
+
+    // Replace the owner's pending pre-reservation set.
+    // Only one pre-reservation owner is kept per node; existing owners win until cleared.
+    void updatePreReservations(const std::string& ownerAgvId, const std::vector<int>& nodeIds);
+
+    // Clear all pending pre-reservations owned by the AGV.
+    void clearPreReservationsByOwner(const std::string& ownerAgvId);
+
+    // Whether the AGV currently owns at least one pending pre-reservation.
+    bool ownerHasPreReservations(const std::string& ownerAgvId) const;
+
+    // Get the node's pending pre-reservation owner, if any.
+    std::optional<PreReservationEntry> getPreReservation(int nodeId) const;
 
     // Release a node held by owner (no-op if not held or held by others).
     void release(int nodeId, const std::string& ownerAgvId);
@@ -149,10 +169,18 @@ private:
         std::chrono::steady_clock::time_point expiresAt{};
     };
 
+    struct PreReservationEntryInternal {
+        std::string ownerAgvId;
+        std::chrono::steady_clock::time_point updatedAt{};
+    };
+
     static constexpr size_t kShardCount = 64;
     std::array<Shard, kShardCount> shards_{};
     mutable std::shared_mutex distanceConflictMutex_;
     DistanceConflictIndex distanceConflictIndex_{};
+    mutable std::shared_mutex preReservationMutex_;
+    std::unordered_map<int, PreReservationEntryInternal> preReservationEntries_{};
+    std::unordered_map<std::string, std::vector<int>> preReservationNodesByOwner_{};
     mutable std::shared_mutex directionalGroupMutex_;
     std::unordered_map<std::string, std::unordered_map<std::string, DirectionalGroupEntryInternal>>
         directionalGroupEntries_{};
@@ -173,6 +201,8 @@ private:
     }
 
     std::vector<int> conflictNodeIdsFor(int nodeId) const;
+    void erasePreReservationNodeLocked(int nodeId, const std::string& ownerAgvId);
+    void clearPreReservationsByOwnerLocked(const std::string& ownerAgvId);
 };
 
 #endif  // NODE_RESERVATION_TABLE_H
