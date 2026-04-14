@@ -163,7 +163,7 @@ def longest_bridge_component(map_json: Dict[str, Any]) -> set[int]:
         adj.setdefault(b, set()).add(a)
 
     best_nodes: set[int] = set()
-    best_score = (-1.0, -1)
+    best_score: Optional[Tuple[float, int, float, float]] = None
     remaining = set(bridge_node_set)
     while remaining:
         start = next(iter(remaining))
@@ -181,7 +181,11 @@ def longest_bridge_component(map_json: Dict[str, Any]) -> set[int]:
 
         total_len = 0.0
         seen_edges: set[Tuple[int, int]] = set()
+        xs: List[float] = []
         for a in comp:
+            pos = node_pos.get(a)
+            if pos is not None:
+                xs.append(pos[0])
             for b in adj.get(a, set()):
                 edge_key = (min(a, b), max(a, b))
                 if edge_key in seen_edges:
@@ -191,8 +195,12 @@ def longest_bridge_component(map_json: Dict[str, Any]) -> set[int]:
                 pb = node_pos.get(b)
                 if pa and pb:
                     total_len += ((pa[0] - pb[0]) ** 2 + (pa[1] - pb[1]) ** 2) ** 0.5
-        score = (total_len, len(comp))
-        if score > best_score:
+        center_x = (sum(xs) / len(xs)) if xs else float("inf")
+        x_span = (max(xs) - min(xs)) if xs else float("inf")
+        ys = [node_pos[a][1] for a in comp if a in node_pos]
+        y_span = (max(ys) - min(ys)) if ys else 0.0
+        score = (y_span, len(comp), -x_span, -center_x)
+        if best_score is None or score > best_score:
             best_score = score
             best_nodes = comp
     return best_nodes
@@ -266,7 +274,7 @@ def extract_first_paths(
     raw_events: List[Dict[str, Any]],
     map_json: Dict[str, Any],
 ) -> Dict[str, Dict[str, Any]]:
-    """Build first_paths from path_update events, stitching a global route per AGV when possible."""
+    """Build first_paths from RobotPathResponse-derived path_update events."""
     node_pos: Dict[int, Tuple[float, float]] = {}
     for n in map_json.get("nodes", []):
         nid = node_id(n.get("id"))
@@ -404,12 +412,19 @@ def extract_first_paths(
             "node_ids": [nid for nid in route if nid in node_pos],
             "route_text": short_route_text(route, limit=6),
             "points": points,
+            "path_response_node_ids": [nid for nid in route if nid in node_pos],
+            "path_response_points": points,
+            "path_response_route_text": short_route_text(route, limit=6),
+            "path_response_point_count": len(points),
             "assignment_node_ids": [nid for nid in assignment_route if nid in node_pos],
             "assignment_points": assignment_points,
+            "path_response_first_segment_node_ids": [nid for nid in assignment_route if nid in node_pos],
+            "path_response_first_segment_points": assignment_points,
             "first_subtask": first_marker,
             "subtask_nodes": subtask_nodes,
             "subtask_points": subtask_points,
             "subtask_count": len(subtask_nodes),
+            "path_source": "path_response",
         }
     return first_paths
 
@@ -511,13 +526,16 @@ def summarize_assignment_items(
                 "agv_id": agv_id,
                 "task_ids": task_ids,
                 "raw_task_ids": raw_task_ids,
-                "task_chain_text": (" -> ".join(task_ids[:4]) + (" -> ..." if len(task_ids) > 4 else "")) if task_ids else "未接单",
+                "task_chain_text": " -> ".join(task_ids) if task_ids else "未接单",
                 "eta_text": duration_text_from_iso(entry.get("estimated_start_time"), entry.get("estimated_completion_time")) if task_ids else "-",
                 "first_task_id": first_task_id,
                 "first_pickup_node": first_pickup,
                 "has_first_path": agv_id in first_paths,
                 "assigned": bool(task_ids),
                 "task_count": len(task_ids),
+                "path_route_text": str((first_paths.get(agv_id) or {}).get("path_response_route_text") or (first_paths.get(agv_id) or {}).get("route_text") or "").strip(),
+                "path_point_count": safe_int((first_paths.get(agv_id) or {}).get("path_response_point_count"), safe_int((first_paths.get(agv_id) or {}).get("point_count"), 0)),
+                "subtask_count": safe_int((first_paths.get(agv_id) or {}).get("subtask_count"), 0),
             }
         )
         if len(items) >= limit:
@@ -794,6 +812,7 @@ def build_assignment_scene(
     task_aliases: Dict[str, str],
     focus_agv_ids: Optional[List[str]] = None,
     allowed_agv_ids: Optional[set[str]] = None,
+    result_title: str = "AGV 列表",
 ) -> Optional[Dict[str, Any]]:
     assignments = assignment_raw.get("assignments")
     if not isinstance(assignments, list):
@@ -814,7 +833,9 @@ def build_assignment_scene(
         node_ids.extend([item.get("pickup_node"), item.get("delivery_node")])
     for item in assignment_items:
         node_ids.append(item.get("first_pickup_node"))
-    agv_ids = focus_agv_ids or [item.get("agv_id", "") for item in assignment_items[:4]]
+    agv_ids = focus_agv_ids or [item.get("agv_id", "") for item in assignment_items if item.get("assigned")][:2]
+    if not agv_ids:
+        agv_ids = [item.get("agv_id", "") for item in assignment_items[:2]]
     return {
         "scene_id": scene_id,
         "order": order,
@@ -832,13 +853,13 @@ def build_assignment_scene(
         "cards": [
             {
                 "type": "task_input",
-                "title": "输入任务",
+                "title": "任务列表",
                 "task_count": len(task_items),
                 "items": task_items,
             },
             {
                 "type": "assignment_result",
-                "title": "AGV 分配结果",
+                "title": result_title,
                 "items": assignment_items,
             },
         ],
@@ -882,8 +903,9 @@ def build_path_scene(
         "scene_label": f"Scene {order}",
         "kind": "path_planning",
         "title": "路径规划",
-        "subtitle": "点击 AGV 可高亮覆盖全部子任务点的全局路径。",
+        "subtitle": "点击 AGV 可高亮 RobotPathRequest 的响应路径，并标出该车的全部子任务点。",
         "start_s": max(0.0, safe_float(chosen.get("start_s"), 0.0) - 0.1),
+        "end_s": max(0.0, safe_float(chosen.get("start_s"), 0.0) - 0.1) + 8.0,
         "focus": {
             "agv_ids": [agv_id] if agv_id else [],
             "node_ids": unique_ints(subtask_nodes + node_ids, limit=12),
@@ -893,9 +915,9 @@ def build_path_scene(
         "cards": [
             {
                 "type": "path_result",
-                "title": "全局 Path",
-                "items": items,
-            }
+            "title": "PathRequest 响应",
+            "items": items,
+        }
         ],
     }
 
@@ -932,7 +954,7 @@ def build_bridge_scene(
         "order": order,
         "scene_label": f"Scene {order}",
         "kind": "bridge",
-        "title": "桥场景",
+        "title": "桥区让行",
         "subtitle": f"{agv_id} 路径经过独木桥(N575)区域，展示桥区路径组织。",
         "start_s": start_s,
         "end_s": start_s + 25.0,
@@ -940,7 +962,7 @@ def build_bridge_scene(
             "agv_ids": [agv_id] if agv_id else [],
             "node_ids": unique_ints([node_id(x) for x in bridge_nodes], limit=10),
             "zoom": 2.6,
-            "mode": "path",
+            "mode": "trail",
         },
         "cards": [
             {
@@ -1016,8 +1038,6 @@ def build_bridge_wait_scene(
     # --- Phase 2: for each period, find a waiting AGV that enters after ---
     candidates: List[Dict[str, Any]] = []
     for period in periods:
-        if period["start_s"] < 30.0:
-            continue
         occ_agvs = period["agv_ids"]
         waiting_stats: Dict[str, Dict[str, Any]] = {}
         for frame in frames:
@@ -1100,8 +1120,10 @@ def build_bridge_wait_scene(
     bridge_agv = chosen["bridge_agv"]
     waiting_agv = chosen["waiting_agv"]
     entry_time_s = chosen.get("entry_time_s")
-    start_s = max(0.0, chosen["period_start"] - 5.0)
-    end_s = (entry_time_s + 5.0) if entry_time_s else (chosen["period_end"] + 10.0)
+    start_anchor_s = safe_float(chosen.get("wait_start_s"), chosen["period_start"])
+    end_anchor_s = max(chosen["period_end"], safe_float(chosen.get("wait_end_s"), chosen["period_end"]))
+    start_s = max(0.0, start_anchor_s - 0.5)
+    end_s = (entry_time_s + 3.0) if entry_time_s else (end_anchor_s + 3.0)
 
     subtitle = (
         f"{bridge_agv} 与 {waiting_agv} 在桥两端形成对向占道，{waiting_agv} 等待后被放行进入。"
@@ -1113,7 +1135,7 @@ def build_bridge_wait_scene(
         "order": order,
         "scene_label": f"Scene {order}",
         "kind": "bridge",
-        "title": "桥上对向冲突",
+        "title": "桥区让行",
         "subtitle": subtitle,
         "start_s": start_s,
         "end_s": end_s,
@@ -1122,7 +1144,7 @@ def build_bridge_wait_scene(
             "agv_ids": [bridge_agv, waiting_agv],
             "node_ids": sorted(preferred_node_values),
             "zoom": 3.0,
-            "mode": "path",
+            "mode": "trail",
         },
         "cards": [
             {
@@ -1197,21 +1219,48 @@ def build_representative_conflict_scene(
         contender = str(item.get("contender_agv", "")).strip()
         if not owner or not contender:
             continue
-        grouped.setdefault((owner, contender), []).append(item)
+        key = tuple(sorted((owner, contender)))
+        grouped.setdefault(key, []).append(item)
 
-    best: Optional[Tuple[Tuple[str, str], List[Dict[str, Any]]]] = None
+    best_window: Optional[List[Dict[str, Any]]] = None
+    best_score: Optional[Tuple[int, float, float]] = None
     for key, events in grouped.items():
-        later = [event for event in events if safe_float(event.get("start_s"), 0.0) >= min_start_s]
-        source = later
-        if not source:
+        later = [
+            event
+            for event in events
+            if safe_float(event.get("start_s"), 0.0) >= min_start_s
+            and not bool(event.get("bridge_related"))
+        ]
+        if len(later) < 2:
             continue
-        if best is None or len(source) > len(best[1]):
-            best = (key, source)
-    if best is None:
+        later.sort(key=lambda event: safe_float(event.get("start_s"), 0.0))
+        local_best_window: Optional[List[Dict[str, Any]]] = None
+        local_best_score: Optional[Tuple[int, float, float]] = None
+        max_window = min(4, len(later))
+        for start_idx in range(len(later)):
+            for window_size in range(2, max_window + 1):
+                end_idx = start_idx + window_size
+                if end_idx > len(later):
+                    break
+                window = later[start_idx:end_idx]
+                span_s = safe_float(window[-1].get("start_s"), 0.0) - safe_float(window[0].get("start_s"), 0.0)
+                score = (len(window), -span_s, -safe_float(window[0].get("start_s"), 0.0))
+                if local_best_score is None or score > local_best_score:
+                    local_best_score = score
+                    local_best_window = window
+        if local_best_window is None or local_best_score is None:
+            continue
+        if best_score is None or local_best_score > best_score:
+            best_score = local_best_score
+            best_window = local_best_window
+    if best_window is None:
         return build_conflict_scene(order=order, conflict_events=conflict_events, after_s=min_start_s)
 
-    (owner, contender), source = best
+    source = best_window
     source.sort(key=lambda event: safe_float(event.get("start_s"), 0.0))
+    first_event = source[0]
+    owner = str(first_event.get("owner_agv", "")).strip()
+    contender = str(first_event.get("contender_agv", "")).strip()
     start_s = safe_float(source[0].get("start_s"), 0.0)
     end_s = safe_float(source[min(len(source) - 1, 3)].get("start_s"), start_s) + 4.0
     node_ids = [node_id(event.get("node_id")) for event in source[:4]]
@@ -1496,6 +1545,7 @@ def build_idle_assignment_scene(
                 first_paths=first_paths,
                 task_aliases=task_aliases,
                 allowed_agv_ids=allowed,
+                result_title="空闲 AGV 列表",
             )
             if scene is not None:
                 if scene_start_override is not None:
@@ -1512,25 +1562,25 @@ def build_idle_assignment_scene(
 
 def assign_scene_ranges(scenes: List[Dict[str, Any]], total_sim_s: float) -> List[Dict[str, Any]]:
     ordered = [dict(scene) for scene in scenes if scene]
-    ordered.sort(key=lambda item: safe_int(item.get("order"), 0))
-    min_span_by_order = {
-        1: 6.0,
-        2: 6.0,
-        3: 8.0,
-        4: 10.0,
-        5: 8.0,
+    ordered.sort(key=lambda item: safe_float(item.get("start_s"), 0.0))
+    min_span_by_kind = {
+        "assignment": 4.0,
+        "path_planning": 5.0,
+        "bridge": 8.0,
+        "idle_assignment": 5.0,
+        "headon_conflict": 6.0,
+        "blocking_conflict": 6.0,
     }
-    cursor_s = 0.0
-    for idx, scene in enumerate(ordered):
-        start_s = max(safe_float(scene.get("start_s"), 0.0), cursor_s)
+    for scene in ordered:
+        kind = str(scene.get("kind", "")).strip()
+        min_span = safe_float(min_span_by_kind.get(kind), 4.0)
+        start_s = max(0.0, safe_float(scene.get("start_s"), 0.0))
         scene["start_s"] = start_s
-        min_span = min_span_by_order.get(safe_int(scene.get("order"), 0), 6.0)
-        if idx + 1 < len(ordered):
-            next_raw_start = safe_float(ordered[idx + 1].get("start_s"), total_sim_s)
-            cursor_s = min(total_sim_s, max(next_raw_start, start_s + min_span))
-            scene["end_s"] = max(start_s, cursor_s - 0.05)
-        else:
-            scene["end_s"] = max(start_s, total_sim_s)
+        raw_end_s = safe_float(scene.get("end_s"), -1.0)
+        desired_end_s = start_s + min_span
+        if raw_end_s > start_s:
+            desired_end_s = max(desired_end_s, raw_end_s)
+        scene["end_s"] = max(start_s, min(total_sim_s, desired_end_s))
     return ordered
 
 
@@ -1581,16 +1631,13 @@ def build_scenes(
         task_raw=first_task_raw,
         first_paths=first_paths,
         task_aliases=task_aliases,
+        result_title="AGV 列表",
     )
     if scene_1 is not None:
-        scene_1["start_s"] = 0.0
-        scene_1["end_s"] = 8.0
         scene_1["playback_rate"] = 1.0
 
     scene_2 = build_path_scene(order=2, first_paths=first_paths, after_s=0.0, preferred_agv_ids=first_assigned_agv_ids)
     if scene_2 is not None:
-        scene_2["start_s"] = 8.0
-        scene_2["end_s"] = 18.0
         scene_2["playback_rate"] = 1.0
 
     # Scene 3: longest bridge scene — prefer a real wait->yield->entry cycle, fall back to simple traversal.
@@ -1606,48 +1653,44 @@ def build_scenes(
             order=3,
             first_paths=first_paths,
             bridge_node_set=longest_bridge_nodes or bridge_node_set,
-            after_s=30.0,
+            after_s=12.0,
         )
     if scene_bridge is not None:
         scene_bridge["playback_rate"] = 1.0
 
-    # Scene 4: conflict (starts after bridge to avoid overlap)
-    conflict_min_s = 20.0
-    if scene_bridge is not None:
-        conflict_min_s = max(conflict_min_s, safe_float(scene_bridge.get("end_s"), 20.0) + 1.0)
-    scene_conflict = build_headon_conflict_scene(
-        order=4, frames=frames, map_edges=map_json.get("edges", []),
-        min_start_s=conflict_min_s, max_start_s=250.0,
+    # Scene 4: representative conflict chosen by actual occurrence time.
+    conflict_min_s = 15.0
+    scene_conflict = build_representative_conflict_scene(
+        order=4,
+        conflict_events=conflict_events,
+        min_start_s=conflict_min_s,
     )
+    if scene_conflict is None:
+        scene_conflict = build_headon_conflict_scene(
+            order=4, frames=frames, map_edges=map_json.get("edges", []),
+            min_start_s=conflict_min_s, max_start_s=250.0,
+        )
     if scene_conflict is None:
         scene_conflict = build_blocking_scene(order=4, frames=frames, min_start_s=conflict_min_s, max_start_s=250.0)
     if scene_conflict is not None:
         scene_conflict["playback_rate"] = 1.0
 
     # Scene 5: idle AGV picks up new tasks
-    idle_start = max(160.0, total_sim_s * 0.7)
-    last_scene_end = 0.0
-    if scene_bridge is not None:
-        last_scene_end = max(last_scene_end, safe_float(scene_bridge.get("end_s"), 0.0))
-    if scene_conflict is not None:
-        last_scene_end = max(last_scene_end, safe_float(scene_conflict.get("end_s"), 0.0))
-    idle_start = max(idle_start, last_scene_end + 2.0)
     scene_5 = build_idle_assignment_scene(
         order=5,
         assignment_events=assignment_events,
         task_events=task_events,
         first_paths=first_paths,
         task_aliases=task_aliases,
-        after_s=70.0,
-        scene_start_override=idle_start,
+        after_s=30.0,
     )
     if scene_5 is not None:
-        scene_5["end_s"] = total_sim_s
         scene_5["playback_rate"] = 1.0
 
     # Collect scenes, sort chronologically, re-assign order numbers
     raw_scenes = [s for s in [scene_1, scene_2, scene_conflict, scene_bridge, scene_5] if s]
     raw_scenes.sort(key=lambda s: safe_float(s.get("start_s"), 0.0))
+    raw_scenes = assign_scene_ranges(raw_scenes, total_sim_s)
     for idx, scene in enumerate(raw_scenes):
         scene["order"] = idx + 1
         scene["scene_label"] = f"Scene {idx + 1}"
@@ -1753,7 +1796,7 @@ def build_bundle(session_dir: Path, *, bundle_name: str = "leader_demo_bundle.js
             **session_json,
             "bundle_name": bundle_name,
             "profile": "leader_demo",
-            "director_base_rate": 1.0,
+            "director_base_rate": 2.4,
         },
         "summary": summary,
         "map": map_json,

@@ -7,6 +7,14 @@
 #include <cmath>
 #include <mutex>
 
+namespace {
+
+static bool keep_group_key(const std::vector<std::string>& keys, const std::string& groupKey) {
+    return std::find(keys.begin(), keys.end(), groupKey) != keys.end();
+}
+
+}  // namespace
+
 void NodeReservationTable::configureDistanceConflict(const MapInfo& mapInfo, double thresholdMm) {
     DistanceConflictIndex nextIndex;
     if (std::isfinite(thresholdMm) && thresholdMm > 0.0) {
@@ -189,6 +197,7 @@ void NodeReservationTable::releaseAllByOwner(const std::string& ownerAgvId) {
             }
         }
     }
+    releaseAllDirectionalGroupsByOwner(ownerAgvId);
 }
 
 void NodeReservationTable::releaseAllByOwnerExcept(const std::string& ownerAgvId, int keepNodeId) {
@@ -333,6 +342,209 @@ std::optional<NodeReservationTable::HoldEntry> NodeReservationTable::findBlockin
     return std::nullopt;
 }
 
+bool NodeReservationTable::tryReserveDirectionalGroup(const std::string& groupKey,
+                                                      const std::string& ownerAgvId,
+                                                      int direction,
+                                                      int sameDirectionCapacity,
+                                                      const std::string& detail,
+                                                      std::chrono::milliseconds ttl) {
+    if (groupKey.empty() || ownerAgvId.empty()) return false;
+    const auto now = std::chrono::steady_clock::now();
+    const auto expiresAt = (ttl.count() > 0) ? (now + ttl) : std::chrono::steady_clock::time_point{};
+    const int normalizedDir = (direction > 0) ? 1 : ((direction < 0) ? -1 : 0);
+    const int normalizedCap = std::max(1, sameDirectionCapacity);
+
+    std::unique_lock<std::shared_mutex> lk(directionalGroupMutex_);
+    auto& groupEntries = directionalGroupEntries_[groupKey];
+    for (auto it = groupEntries.begin(); it != groupEntries.end();) {
+        if (isExpired(it->second, now)) {
+            it = groupEntries.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    int sameDirOwners = 0;
+    bool blocked = false;
+    for (const auto& kv : groupEntries) {
+        if (kv.first == ownerAgvId) continue;
+        const auto& e = kv.second;
+        const int otherDir = (e.direction > 0) ? 1 : ((e.direction < 0) ? -1 : 0);
+        if (normalizedDir == 0 || otherDir == 0) {
+            blocked = true;
+            break;
+        }
+        if (otherDir != normalizedDir) {
+            blocked = true;
+            break;
+        }
+        sameDirOwners += 1;
+    }
+    if (!blocked && normalizedDir != 0 && sameDirOwners >= normalizedCap) {
+        blocked = true;
+    }
+    if (blocked) return false;
+
+    auto& entry = groupEntries[ownerAgvId];
+    entry.direction = normalizedDir;
+    entry.sameDirectionCapacity = normalizedCap;
+    entry.detail = detail;
+    entry.updatedAt = now;
+    entry.expiresAt = expiresAt;
+    return true;
+}
+
+void NodeReservationTable::releaseDirectionalGroup(const std::string& groupKey,
+                                                   const std::string& ownerAgvId) {
+    if (groupKey.empty() || ownerAgvId.empty()) return;
+    const auto now = std::chrono::steady_clock::now();
+    std::unique_lock<std::shared_mutex> lk(directionalGroupMutex_);
+    auto it = directionalGroupEntries_.find(groupKey);
+    if (it == directionalGroupEntries_.end()) return;
+    auto& groupEntries = it->second;
+    for (auto jt = groupEntries.begin(); jt != groupEntries.end();) {
+        if (isExpired(jt->second, now) || jt->first == ownerAgvId) {
+            jt = groupEntries.erase(jt);
+        } else {
+            ++jt;
+        }
+    }
+    if (groupEntries.empty()) directionalGroupEntries_.erase(it);
+}
+
+void NodeReservationTable::releaseAllDirectionalGroupsByOwner(const std::string& ownerAgvId) {
+    if (ownerAgvId.empty()) return;
+    const auto now = std::chrono::steady_clock::now();
+    std::unique_lock<std::shared_mutex> lk(directionalGroupMutex_);
+    for (auto it = directionalGroupEntries_.begin(); it != directionalGroupEntries_.end();) {
+        auto& groupEntries = it->second;
+        for (auto jt = groupEntries.begin(); jt != groupEntries.end();) {
+            if (isExpired(jt->second, now) || jt->first == ownerAgvId) {
+                jt = groupEntries.erase(jt);
+            } else {
+                ++jt;
+            }
+        }
+        if (groupEntries.empty()) {
+            it = directionalGroupEntries_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void NodeReservationTable::releaseAllDirectionalGroupsByOwnerExceptSet(
+    const std::string& ownerAgvId,
+    const std::vector<std::string>& keepGroupKeys) {
+    if (ownerAgvId.empty()) return;
+    const auto now = std::chrono::steady_clock::now();
+    std::unique_lock<std::shared_mutex> lk(directionalGroupMutex_);
+    for (auto it = directionalGroupEntries_.begin(); it != directionalGroupEntries_.end();) {
+        auto& groupEntries = it->second;
+        for (auto jt = groupEntries.begin(); jt != groupEntries.end();) {
+            if (isExpired(jt->second, now)) {
+                jt = groupEntries.erase(jt);
+                continue;
+            }
+            if (jt->first == ownerAgvId && !keep_group_key(keepGroupKeys, it->first)) {
+                jt = groupEntries.erase(jt);
+                continue;
+            }
+            ++jt;
+        }
+        if (groupEntries.empty()) {
+            it = directionalGroupEntries_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+std::vector<NodeReservationTable::DirectionalGroupHoldEntry>
+NodeReservationTable::snapshotDirectionalGroupHolds(const std::string& groupKey,
+                                                    const std::string& excludeOwnerAgvId) const {
+    std::vector<DirectionalGroupHoldEntry> out;
+    if (groupKey.empty()) return out;
+    const auto now = std::chrono::steady_clock::now();
+    std::shared_lock<std::shared_mutex> lk(directionalGroupMutex_);
+    auto it = directionalGroupEntries_.find(groupKey);
+    if (it == directionalGroupEntries_.end()) return out;
+    out.reserve(it->second.size());
+    for (const auto& kv : it->second) {
+        if (!excludeOwnerAgvId.empty() && kv.first == excludeOwnerAgvId) continue;
+        if (isExpired(kv.second, now)) continue;
+        DirectionalGroupHoldEntry entry;
+        entry.groupKey = groupKey;
+        entry.ownerAgvId = kv.first;
+        entry.direction = kv.second.direction;
+        entry.sameDirectionCapacity = kv.second.sameDirectionCapacity;
+        entry.detail = kv.second.detail;
+        entry.updatedAt = kv.second.updatedAt;
+        entry.expiresAt = kv.second.expiresAt;
+        out.push_back(std::move(entry));
+    }
+    return out;
+}
+
+std::optional<NodeReservationTable::DirectionalGroupHoldEntry>
+NodeReservationTable::getDirectionalGroupHold(const std::string& groupKey,
+                                              const std::string& ownerAgvId) const {
+    if (groupKey.empty() || ownerAgvId.empty()) return std::nullopt;
+    const auto now = std::chrono::steady_clock::now();
+    std::shared_lock<std::shared_mutex> lk(directionalGroupMutex_);
+    auto it = directionalGroupEntries_.find(groupKey);
+    if (it == directionalGroupEntries_.end()) return std::nullopt;
+    auto jt = it->second.find(ownerAgvId);
+    if (jt == it->second.end() || isExpired(jt->second, now)) return std::nullopt;
+    DirectionalGroupHoldEntry entry;
+    entry.groupKey = groupKey;
+    entry.ownerAgvId = ownerAgvId;
+    entry.direction = jt->second.direction;
+    entry.sameDirectionCapacity = jt->second.sameDirectionCapacity;
+    entry.detail = jt->second.detail;
+    entry.updatedAt = jt->second.updatedAt;
+    entry.expiresAt = jt->second.expiresAt;
+    return entry;
+}
+
+std::optional<NodeReservationTable::DirectionalGroupHoldEntry>
+NodeReservationTable::findBlockingDirectionalGroup(const std::string& groupKey,
+                                                   const std::string& ownerAgvId,
+                                                   int direction,
+                                                   int sameDirectionCapacity) const {
+    if (groupKey.empty() || ownerAgvId.empty()) return std::nullopt;
+    const auto now = std::chrono::steady_clock::now();
+    const int normalizedDir = (direction > 0) ? 1 : ((direction < 0) ? -1 : 0);
+    const int normalizedCap = std::max(1, sameDirectionCapacity);
+    std::shared_lock<std::shared_mutex> lk(directionalGroupMutex_);
+    auto it = directionalGroupEntries_.find(groupKey);
+    if (it == directionalGroupEntries_.end()) return std::nullopt;
+
+    int sameDirOwners = 0;
+    std::optional<DirectionalGroupHoldEntry> fallback;
+    for (const auto& kv : it->second) {
+        if (kv.first == ownerAgvId || isExpired(kv.second, now)) continue;
+        const int otherDir = (kv.second.direction > 0) ? 1 : ((kv.second.direction < 0) ? -1 : 0);
+        DirectionalGroupHoldEntry entry;
+        entry.groupKey = groupKey;
+        entry.ownerAgvId = kv.first;
+        entry.direction = kv.second.direction;
+        entry.sameDirectionCapacity = kv.second.sameDirectionCapacity;
+        entry.detail = kv.second.detail;
+        entry.updatedAt = kv.second.updatedAt;
+        entry.expiresAt = kv.second.expiresAt;
+        if (normalizedDir == 0 || otherDir == 0 || otherDir != normalizedDir) {
+            return entry;
+        }
+        sameDirOwners += 1;
+        fallback = entry;
+    }
+    if (normalizedDir != 0 && sameDirOwners >= normalizedCap) {
+        return fallback;
+    }
+    return std::nullopt;
+}
+
 void NodeReservationTable::cleanupExpired() {
     const auto now = std::chrono::steady_clock::now();
     for (auto& shard : shards_) {
@@ -343,6 +555,22 @@ void NodeReservationTable::cleanupExpired() {
             } else {
                 ++it;
             }
+        }
+    }
+    std::unique_lock<std::shared_mutex> lk(directionalGroupMutex_);
+    for (auto it = directionalGroupEntries_.begin(); it != directionalGroupEntries_.end();) {
+        auto& groupEntries = it->second;
+        for (auto jt = groupEntries.begin(); jt != groupEntries.end();) {
+            if (isExpired(jt->second, now)) {
+                jt = groupEntries.erase(jt);
+            } else {
+                ++jt;
+            }
+        }
+        if (groupEntries.empty()) {
+            it = directionalGroupEntries_.erase(it);
+        } else {
+            ++it;
         }
     }
 }

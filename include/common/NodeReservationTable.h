@@ -32,6 +32,16 @@ public:
         std::chrono::steady_clock::time_point expiresAt{};  // expiresAt==time_point{} => never expires
     };
 
+    struct DirectionalGroupHoldEntry {
+        std::string groupKey;
+        std::string ownerAgvId;
+        int direction = 0;  // 0=exclusive/unknown, +/-1=bridge travel direction
+        int sameDirectionCapacity = 1;
+        std::string detail;
+        std::chrono::steady_clock::time_point updatedAt{};
+        std::chrono::steady_clock::time_point expiresAt{};
+    };
+
     NodeReservationTable() = default;
 
     // Configure distance-based conflict groups from current map.
@@ -72,6 +82,43 @@ public:
     std::optional<HoldEntry> findBlockingHold(int nodeId,
                                              const std::string& excludeOwnerAgvId = {}) const;
 
+    // Try to reserve a directional corridor/bridge group.
+    // - direction=0 means exclusive occupancy.
+    // - sameDirectionCapacity applies only when direction is +/-1.
+    bool tryReserveDirectionalGroup(const std::string& groupKey,
+                                    const std::string& ownerAgvId,
+                                    int direction,
+                                    int sameDirectionCapacity,
+                                    const std::string& detail = {},
+                                    std::chrono::milliseconds ttl = std::chrono::milliseconds(0));
+
+    // Release a directional corridor/bridge group held by owner (best-effort).
+    void releaseDirectionalGroup(const std::string& groupKey, const std::string& ownerAgvId);
+
+    // Release all directional groups held by owner.
+    void releaseAllDirectionalGroupsByOwner(const std::string& ownerAgvId);
+
+    // Release all directional groups held by owner except keepGroupKeys (best-effort).
+    void releaseAllDirectionalGroupsByOwnerExceptSet(const std::string& ownerAgvId,
+                                                     const std::vector<std::string>& keepGroupKeys);
+
+    // Snapshot directional group holds for a given groupKey.
+    std::vector<DirectionalGroupHoldEntry> snapshotDirectionalGroupHolds(
+        const std::string& groupKey,
+        const std::string& excludeOwnerAgvId = {}) const;
+
+    // Lookup owner's current directional group hold, if any.
+    std::optional<DirectionalGroupHoldEntry> getDirectionalGroupHold(
+        const std::string& groupKey,
+        const std::string& ownerAgvId) const;
+
+    // Find a directional group hold that blocks owner from acquiring groupKey with direction/capacity.
+    std::optional<DirectionalGroupHoldEntry> findBlockingDirectionalGroup(
+        const std::string& groupKey,
+        const std::string& ownerAgvId,
+        int direction,
+        int sameDirectionCapacity) const;
+
     // Best-effort cleanup of expired entries.
     void cleanupExpired();
 
@@ -94,16 +141,33 @@ private:
         std::unordered_map<int, std::vector<int>> nodeIdsByNodeId;
     };
 
+    struct DirectionalGroupEntryInternal {
+        int direction = 0;
+        int sameDirectionCapacity = 1;
+        std::string detail;
+        std::chrono::steady_clock::time_point updatedAt{};
+        std::chrono::steady_clock::time_point expiresAt{};
+    };
+
     static constexpr size_t kShardCount = 64;
     std::array<Shard, kShardCount> shards_{};
     mutable std::shared_mutex distanceConflictMutex_;
     DistanceConflictIndex distanceConflictIndex_{};
+    mutable std::shared_mutex directionalGroupMutex_;
+    std::unordered_map<std::string, std::unordered_map<std::string, DirectionalGroupEntryInternal>>
+        directionalGroupEntries_{};
 
     static size_t shardOf(int nodeId) {
         return std::hash<int>{}(nodeId) % kShardCount;
     }
 
     static bool isExpired(const EntryInternal& e, std::chrono::steady_clock::time_point now) {
+        if (e.expiresAt == std::chrono::steady_clock::time_point{}) return false;
+        return now >= e.expiresAt;
+    }
+
+    static bool isExpired(const DirectionalGroupEntryInternal& e,
+                          std::chrono::steady_clock::time_point now) {
         if (e.expiresAt == std::chrono::steady_clock::time_point{}) return false;
         return now >= e.expiresAt;
     }

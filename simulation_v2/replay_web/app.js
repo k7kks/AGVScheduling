@@ -57,8 +57,9 @@ const replay = {
   highlightFocus: true,
   showReserved: false,
   showBridges: true,
+  showNodeIds: false,
   displayMode: "trail",
-  followAgvId: "",
+  selectedAgvByScene: {},
   lastTickTs: 0,
   mainCamera: createCameraState(),
   focusCamera: createCameraState(),
@@ -69,6 +70,34 @@ const replay = {
     lastDetailKey: "",
   },
 };
+
+function currentSceneKind(scene = currentScene()) {
+  return String(scene?.kind || "");
+}
+
+function sceneSupportsAgvSelection(scene = currentScene()) {
+  const kind = currentSceneKind(scene);
+  return kind.includes("assignment") || kind === "path_planning";
+}
+
+function selectedAgvId(scene = currentScene()) {
+  if (!sceneSupportsAgvSelection(scene)) return "";
+  const sceneId = String(scene?.scene_id || "").trim();
+  if (!sceneId) return "";
+  return String(replay.selectedAgvByScene?.[sceneId] || "").trim();
+}
+
+function setSelectedAgvId(agvId, scene = currentScene()) {
+  if (!sceneSupportsAgvSelection(scene)) return;
+  const sceneId = String(scene?.scene_id || "").trim();
+  if (!sceneId) return;
+  const value = String(agvId || "").trim();
+  if (value) {
+    replay.selectedAgvByScene[sceneId] = value;
+  } else {
+    delete replay.selectedAgvByScene[sceneId];
+  }
+}
 
 const mainCanvas = document.getElementById("main-canvas");
 const focusCanvas = document.getElementById("focus-canvas");
@@ -386,56 +415,33 @@ function subtaskMarkersForPath(pathInfo) {
   return [{ x, y, nodeId, sequence: 1 }];
 }
 
-function allAgvIds() {
-  const ids = [];
-  const seen = new Set();
-  const source = Array.isArray(replay.summary?.agv_ids) && replay.summary.agv_ids.length ? replay.summary.agv_ids : null;
-  if (source) {
-    for (const value of source) {
-      const id = String(value || "").trim();
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      ids.push(id);
-    }
-    return ids;
-  }
-  for (const frame of replay.frames) {
-    for (const agv of frame.agvs || []) {
-      const id = String(agv.id || "").trim();
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      ids.push(id);
-    }
-  }
-  return ids.sort();
-}
-
 function focusDescriptor(frame, event) {
   const scene = currentScene();
-  const sceneKind = String(scene?.kind || "");
+  const sceneKind = currentSceneKind(scene);
   const isAssignment = sceneKind.includes("assignment");
+  const selectedAgv = selectedAgvId(scene);
   const agvIds = new Set();
   const nodeIds = new Set();
-  const rawFocus = event?.focus || scene?.focus || {};
+  const rawFocus =
+    sceneKind === "bridge" || sceneKind.includes("conflict")
+      ? (scene?.focus || {})
+      : (event?.focus || scene?.focus || {});
 
-  if (replay.followAgvId) {
-    agvIds.add(replay.followAgvId);
-    const firstPath = replay.firstPaths?.[replay.followAgvId];
+  if (selectedAgv) {
+    agvIds.add(selectedAgv);
+    const firstPath = replay.firstPaths?.[selectedAgv];
     const markers = subtaskMarkersForPath(firstPath);
     if (isAssignment) {
-      // Assignment & idle-assignment: only show first subtask node
       const firstMarker = markers[0];
       const subtaskNodeId = firstMarker ? parseNodeId(firstMarker.nodeId) : null;
       if (subtaskNodeId !== null) nodeIds.add(subtaskNodeId);
     } else {
-      // Path planning and others: show all subtask nodes
       for (const marker of markers) {
         const subtaskNodeId = parseNodeId(marker.nodeId);
         if (subtaskNodeId !== null) nodeIds.add(subtaskNodeId);
       }
     }
-  } else if (Array.isArray(rawFocus.agv_ids) && rawFocus.agv_ids.length > 0) {
-    // No explicitly followed AGV — use scene/event focus AGVs
+  } else if ((sceneKind === "bridge" || sceneKind.includes("conflict")) && Array.isArray(rawFocus.agv_ids) && rawFocus.agv_ids.length > 0) {
     for (const id of rawFocus.agv_ids) {
       const s = String(id || "").trim();
       if (s) agvIds.add(s);
@@ -453,15 +459,17 @@ function focusDescriptor(frame, event) {
   return {
     agvIds: Array.from(agvIds),
     nodeIds: Array.from(nodeIds),
-    zoom: Math.max(1.0, Number(rawFocus.zoom || (replay.followAgvId ? 1.8 : 1.3)) || 1.3),
-    mode: String(rawFocus.mode || (replay.followAgvId ? "path" : "auto")),
+    zoom: Math.max(1.0, Number(rawFocus.zoom || (selectedAgv ? 1.8 : 1.3)) || 1.3),
+    mode: String(rawFocus.mode || (selectedAgv ? "path" : "auto")),
   };
 }
 
 function collectFocusPoints(frame, focus) {
   const points = [];
   const scene = currentScene();
-  const isAssignment = scene && String(scene.kind || "").includes("assignment");
+  const sceneKind = currentSceneKind(scene);
+  const isAssignment = sceneKind.includes("assignment");
+  const isBridgeOrConflict = sceneKind === "bridge" || sceneKind.includes("conflict");
   const pushPoint = (x, y) => {
     if (Number.isFinite(Number(x)) && Number.isFinite(Number(y))) {
       points.push({ x: Number(x), y: Number(y) });
@@ -482,21 +490,23 @@ function collectFocusPoints(frame, focus) {
         : focus.mode === "trail"
           ? agv.trail || []
           : [...(agv.trail || []).slice(0, 6), ...(agv.path || []).slice(0, 6)];
-    for (const pt of routePoints.slice(0, 6)) {
+    for (const pt of routePoints.slice(0, isBridgeOrConflict ? 12 : 6)) {
       pushPoint(pt.x, pt.y);
     }
-    const firstPath = replay.firstPaths?.[agvId];
-    const routePointsForFocus =
-      isAssignment
-        ? (Array.isArray(firstPath?.assignment_points) ? firstPath.assignment_points : [])
-        : firstPath?.points;
-    if (Array.isArray(routePointsForFocus)) {
-      for (const pt of routePointsForFocus) {
-        pushPoint(pt.x, pt.y);
+    if (!isBridgeOrConflict) {
+      const firstPath = replay.firstPaths?.[agvId];
+      const routePointsForFocus =
+        isAssignment
+          ? (Array.isArray(firstPath?.assignment_points) ? firstPath.assignment_points : [])
+          : (Array.isArray(firstPath?.path_response_points) ? firstPath.path_response_points : firstPath?.points);
+      if (Array.isArray(routePointsForFocus)) {
+        for (const pt of routePointsForFocus) {
+          pushPoint(pt.x, pt.y);
+        }
       }
-    }
-    for (const marker of subtaskMarkersForPath(firstPath)) {
-      pushPoint(marker.x, marker.y);
+      for (const marker of subtaskMarkersForPath(firstPath)) {
+        pushPoint(marker.x, marker.y);
+      }
     }
   }
 
@@ -560,6 +570,7 @@ function cameraTarget(frame, event, variant) {
   const bounds = focusBounds(frame, focus);
   const center = boundsCenter(bounds);
   const fitZoom = zoomForBounds(variant === "main" ? mainCanvas : focusCanvas, bounds, variant === "main" ? 0.22 : 0.16);
+  const selectedAgv = selectedAgvId();
 
   if (variant === "main") {
     if (!replay.autoMainCamera) {
@@ -569,7 +580,7 @@ function cameraTarget(frame, event, variant) {
         zoom: clamp(replay.mainCamera.targetZoom || replay.mainCamera.zoom || 1, ZOOM_MIN, ZOOM_MAX),
       };
     }
-    if (!event && !replay.followAgvId && focus.agvIds.length === 0 && focus.nodeIds.length === 0) {
+    if (!event && !selectedAgv && focus.agvIds.length === 0 && focus.nodeIds.length === 0) {
       return { centerX: wholeCenter.x, centerY: wholeCenter.y, zoom: 1 };
     }
     const desired = event ? focus.zoom * 0.58 : 1.28;
@@ -580,14 +591,14 @@ function cameraTarget(frame, event, variant) {
     };
   }
 
-  if (!replay.autoFocus && !replay.followAgvId) {
+  if (!replay.autoFocus && !selectedAgv) {
     return { centerX: wholeCenter.x, centerY: wholeCenter.y, zoom: 1.05 };
   }
-  if (!event && !replay.followAgvId && focus.agvIds.length === 0 && focus.nodeIds.length === 0) {
+  if (!event && !selectedAgv && focus.agvIds.length === 0 && focus.nodeIds.length === 0) {
     return { centerX: wholeCenter.x, centerY: wholeCenter.y, zoom: 1.05 };
   }
 
-  const desired = event ? focus.zoom : replay.followAgvId ? 1.8 : 1.2;
+  const desired = event ? focus.zoom : selectedAgv ? 1.8 : 1.2;
   return {
     centerX: center.x,
     centerY: center.y,
@@ -644,6 +655,7 @@ function drawMap(ctx, canvas, transform) {
     ctx.moveTo(p0.cx, p0.cy);
     ctx.lineTo(p1.cx, p1.cy);
     ctx.stroke();
+  ctx.shadowBlur = 0;
   }
   for (const node of replay.map?.nodes || []) {
     const p = transform.toCanvas(node.x, node.y);
@@ -651,6 +663,13 @@ function drawMap(ctx, canvas, transform) {
     ctx.arc(p.cx, p.cy, 1.6, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(189, 207, 236, 0.55)";
     ctx.fill();
+    if (replay.showNodeIds) {
+      ctx.font = "10px JetBrains Mono, SFMono-Regular, monospace";
+      ctx.fillStyle = "rgba(210, 225, 245, 0.85)";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      ctx.fillText(`N${node.id}`, p.cx + 6, p.cy + 4);
+    }
   }
   ctx.restore();
 }
@@ -675,6 +694,7 @@ function drawBridges(ctx, transform) {
       ctx.moveTo(p0.cx, p0.cy);
       ctx.lineTo(p1.cx, p1.cy);
       ctx.stroke();
+  ctx.shadowBlur = 0;
     }
     ctx.restore();
   }
@@ -711,6 +731,8 @@ function drawPolyline(ctx, transform, points, style) {
   ctx.save();
   ctx.strokeStyle = style.color;
   ctx.lineWidth = style.width || 2;
+  ctx.shadowBlur = 10;
+  ctx.shadowColor = style.color;
   ctx.globalAlpha = style.alpha ?? 0.8;
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
@@ -723,6 +745,7 @@ function drawPolyline(ctx, transform, points, style) {
     ctx.lineTo(pt.cx, pt.cy);
   }
   ctx.stroke();
+  ctx.shadowBlur = 0;
   ctx.restore();
 }
 
@@ -731,7 +754,7 @@ function drawReserved(ctx, transform, frame, focus) {
   const scene = currentScene();
   const sceneKind = String(scene?.kind || "");
   // In bridge/conflict scenes, suppress volatile reserved-node rendering to avoid flicker
-  if ((sceneKind === "bridge" || sceneKind.includes("conflict")) && !replay.followAgvId) {
+  if (sceneKind === "bridge" || sceneKind.includes("conflict")) {
     return;
   }
   const hasEmphasis = replay.highlightFocus && (focus.agvIds.length || focus.nodeIds.length);
@@ -757,6 +780,7 @@ function drawReserved(ctx, transform, frame, focus) {
 }
 
 function drawFocusNodes(ctx, transform, focus) {
+  if (currentSceneKind() === "bridge") return;
   const pulse = 0.55 + 0.45 * Math.sin(replay.currentTimeS * 6.4);
   ctx.save();
   for (const nid of focus.nodeIds) {
@@ -768,11 +792,13 @@ function drawFocusNodes(ctx, transform, focus) {
     ctx.strokeStyle = `rgba(255, 214, 102, ${0.35 + pulse * 0.35})`;
     ctx.lineWidth = 2.4;
     ctx.stroke();
+  ctx.shadowBlur = 0;
     ctx.beginPath();
     ctx.arc(p.cx, p.cy, 10, 0, Math.PI * 2);
     ctx.strokeStyle = "rgba(255, 214, 102, 0.95)";
     ctx.lineWidth = 2;
     ctx.stroke();
+  ctx.shadowBlur = 0;
     ctx.fillStyle = "rgba(255, 214, 102, 0.95)";
     ctx.font = "bold 11px Arial";
     ctx.textAlign = "center";
@@ -803,17 +829,18 @@ function drawSubtaskMarker(ctx, transform, pt, label) {
 
 function drawSelectedFirstPath(ctx, transform, frame, event) {
   const scene = currentScene();
-  const sceneKind = String(scene?.kind || "");
+  const sceneKind = currentSceneKind(scene);
   const focus = focusDescriptor(frame, event);
+  const selectedAgv = selectedAgvId(scene);
   
   // Bridge/conflict scenes: no path drawing — AGV highlighting suffices
-  if ((sceneKind === "bridge" || sceneKind.includes("conflict")) && !replay.followAgvId) {
+  if (sceneKind === "bridge" || sceneKind.includes("conflict")) {
     return;
   }
 
   // Only draw paths for explicitly clicked AGV
-  if (!replay.followAgvId) return;
-  const agvId = String(replay.followAgvId);
+  if (!selectedAgv) return;
+  const agvId = String(selectedAgv);
 
   const isAssignment = sceneKind.includes("assignment");
   const pathInfo = replay.firstPaths?.[agvId];
@@ -823,10 +850,10 @@ function drawSelectedFirstPath(ctx, transform, frame, event) {
   const subtaskNodes = Array.isArray(pathInfo.subtask_nodes) ? pathInfo.subtask_nodes : [];
   const lineColor = "#0891b2";
 
-  // Assignment/idle scenes: show first segment only; path planning: show full route
+  // Assignment/idle scenes only show the path up to the first subtask point.
   let displayPoints = isAssignment
     ? (Array.isArray(pathInfo.assignment_points) ? pathInfo.assignment_points : [])
-    : pathInfo.points;
+    : (Array.isArray(pathInfo.path_response_points) ? pathInfo.path_response_points : pathInfo.points);
   if (displayPoints.length < 2) return;
 
   ctx.save();
@@ -898,8 +925,9 @@ function drawSelectedFirstPath(ctx, transform, frame, event) {
 
 function drawAgvs(ctx, transform, frame, focus, event) {
   const mode = replay.displayMode;
-  // Dim non-focus AGVs whenever there is ANY focus set (explicit click or scene auto-focus)
+  const sceneKind = currentSceneKind();
   const hasEmphasis = replay.highlightFocus && focus.agvIds.length > 0;
+  const restrictRouteRendering = hasEmphasis && (sceneSupportsAgvSelection() || sceneKind === "bridge" || sceneKind.includes("conflict"));
   const pulse = 0.5 + 0.5 * Math.sin(replay.currentTimeS * 7.2);
   for (let i = 0; i < frame.agvs.length; i += 1) {
     const agv = frame.agvs[i];
@@ -907,7 +935,7 @@ function drawAgvs(ctx, transform, frame, focus, event) {
     const isFocus = focus.agvIds.includes(String(agv.id));
     const dimFactor = hasEmphasis && !isFocus ? 0.18 : 1;
 
-    if (mode !== "path") {
+    if (mode !== "path" && (!restrictRouteRendering || isFocus)) {
       drawPolyline(ctx, transform, agv.trail || [], {
         color,
         width: isFocus ? 4.4 : 2.8,
@@ -925,6 +953,8 @@ function drawAgvs(ctx, transform, frame, focus, event) {
     ctx.beginPath();
     ctx.arc(p.cx, p.cy, isFocus ? 26 : 16, 0, Math.PI * 2);
     ctx.fillStyle = isFocus ? "rgba(255, 214, 102, 0.7)" : bodyColor;
+    ctx.shadowBlur = 15;
+    ctx.shadowColor = isFocus ? "#ffd666" : bodyColor;
     ctx.fill();
     ctx.restore();
 
@@ -936,6 +966,7 @@ function drawAgvs(ctx, transform, frame, focus, event) {
       ctx.strokeStyle = `rgba(255, 224, 130, ${0.45 + pulse * 0.4})`;
       ctx.lineWidth = 3;
       ctx.stroke();
+      ctx.shadowBlur = 0;
       ctx.restore();
     }
 
@@ -947,8 +978,11 @@ function drawAgvs(ctx, transform, frame, focus, event) {
     ctx.fillStyle = bodyColor;
     ctx.fill();
     ctx.strokeStyle = isFocus ? "#ffe082" : color;
-    ctx.lineWidth = isFocus ? 4 : 2.6;
+    ctx.lineWidth = isFocus ? 3 : 2;
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = isFocus ? "#ffe082" : color;
     ctx.stroke();
+    ctx.shadowBlur = 0;
 
     // Direction indicator
     const ang = (Number(agv.angle || 0) * Math.PI) / 180;
@@ -958,6 +992,7 @@ function drawAgvs(ctx, transform, frame, focus, event) {
     ctx.strokeStyle = "rgba(6, 14, 20, 0.9)";
     ctx.lineWidth = 2;
     ctx.stroke();
+    ctx.shadowBlur = 0;
 
     // AGV ID label — always visible for focus, dimmed for others
     ctx.fillStyle = isFocus ? "#ffe082" : "#dbe7fa";
@@ -1003,58 +1038,12 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
-function bindScrollablePanes(root = document) {
-  for (const pane of root.querySelectorAll(".scroll-pane")) {
-    if (pane.dataset.scrollBound === "1") continue;
-    pane.dataset.scrollBound = "1";
-    let dragging = false;
-    let pointerId = null;
-    let startY = 0;
-    let startScrollTop = 0;
-    let moved = false;
-    pane.addEventListener("pointerdown", (event) => {
-      if (event.target.closest("[data-agv-id]") || event.target.closest("[data-scene-id]")) return;
-      dragging = true;
-      moved = false;
-      pointerId = event.pointerId;
-      startY = event.clientY;
-      startScrollTop = pane.scrollTop;
-      pane.classList.add("dragging");
-      pane.setPointerCapture(event.pointerId);
-    });
-    pane.addEventListener("pointermove", (event) => {
-      if (!dragging || pointerId !== event.pointerId) return;
-      const deltaY = event.clientY - startY;
-      if (Math.abs(deltaY) > 4) moved = true;
-      pane.scrollTop = startScrollTop - deltaY;
-    });
-    const stopDrag = (event) => {
-      if (!dragging) return;
-      if (event?.pointerId !== undefined && pointerId !== event.pointerId) return;
-      dragging = false;
-      pointerId = null;
-      pane.classList.remove("dragging");
-    };
-    pane.addEventListener("pointerup", stopDrag);
-    pane.addEventListener("pointercancel", stopDrag);
-    pane.addEventListener(
-      "click",
-      (event) => {
-        if (moved) {
-          event.preventDefault();
-          event.stopPropagation();
-        }
-      },
-      true
-    );
-  }
-}
-
 function updateStageBadges(event) {
   const speedBadge = document.getElementById("speed-badge");
   const cameraBadge = document.getElementById("camera-badge");
   const cue = currentCue();
   const rate = effectiveSpeed().toFixed(2);
+  const selectedAgv = selectedAgvId();
   if (event) {
     speedBadge.textContent = `慢放 ${rate}x`;
     speedBadge.style.background = "rgba(255, 159, 67, 0.18)";
@@ -1078,7 +1067,7 @@ function updateStageBadges(event) {
   }
 
   if (replay.autoMainCamera) {
-    cameraBadge.textContent = replay.followAgvId ? `主镜头跟随 ${replay.followAgvId}` : "主镜头自动";
+    cameraBadge.textContent = selectedAgv ? `主镜头跟随 ${selectedAgv}` : "主镜头自动";
   } else {
     cameraBadge.textContent = "主镜头手动";
   }
@@ -1092,6 +1081,7 @@ function renderDetailCards(scene) {
     return;
   }
   const blocks = [];
+  const selectedAgv = selectedAgvId(scene);
   for (const card of scene.cards) {
     const type = String(card.type || "");
     if (type === "task_input") {
@@ -1127,13 +1117,14 @@ function renderDetailCards(scene) {
             ${items
               .map((item) => {
                 const agvId = String(item.agv_id || "").trim();
-                const active = agvId && agvId === replay.followAgvId;
+                const active = agvId && agvId === selectedAgv;
                 const mainText = type === "assignment_result" ? escapeHtml(item.task_chain_text || "-") : escapeHtml(item.route_text || "-");
                 const subtaskCount = Number(item.subtask_count || 0);
+                const pathRouteText = escapeHtml(item.path_route_text || item.route_text || "-");
                 const subText =
                   type === "assignment_result"
-                    ? `${item.has_first_path ? "点击可高亮首个子任务点和首段路径" : "当前无可高亮路径"} · 等效时间 ${escapeHtml(item.eta_text || "-")}`
-                    : `点击可高亮全局路径 · Path ${escapeHtml(item.point_count ?? "-")} 点${subtaskCount > 0 ? ` · 子任务点 ${escapeHtml(subtaskCount)}` : ""}`;
+                    ? `${item.has_first_path ? "点击可高亮 AGV、首个子任务点与首段路径" : "当前无可高亮路径"} · ETA ${escapeHtml(item.eta_text || "-")}${subtaskCount > 0 ? ` · 子任务点 ${escapeHtml(subtaskCount)}` : ""}`
+                    : `点击可高亮 PathRequest 响应路径 · Path ${escapeHtml(item.point_count ?? "-")} 点${subtaskCount > 0 ? ` · 子任务点 ${escapeHtml(subtaskCount)}` : ""}`;
                 const statusText =
                   type === "assignment_result"
                     ? (item.assigned === false ? "未接单" : "已接单")
@@ -1147,12 +1138,13 @@ function renderDetailCards(scene) {
                     </div>
                     <div class="assignment-chain">${mainText}</div>
                     <div class="detail-meta-text">${subText}</div>
+                    ${type === "assignment_result" && item.has_first_path ? `<div class="detail-meta-text">首段路径：${pathRouteText}</div>` : ""}
                   </button>
                 `;
               })
               .join("")}
           </div>
-          <div class="focus-hint">${type === "assignment_result" ? "点击 AGV 后，会高亮该车到首个子任务点的路径，并标出第一个子任务点。" : "点击 AGV 后，会高亮该车覆盖全部子任务点的全局路径，并标出所有子任务点。"}</div>
+          <div class="focus-hint">${type === "assignment_result" ? "点击 AGV 后，会高亮该车到首个子任务点的路径，并标出首个子任务点。" : "点击 AGV 后，会高亮该车覆盖全部子任务点的 RobotPathRequest 响应路径。"}</div>
         </div>
       `);
       continue;
@@ -1182,7 +1174,6 @@ function renderDetailCards(scene) {
     }
   }
   root.innerHTML = blocks.join("");
-  bindScrollablePanes(root);
 }
 
 function updateBanner(event) {
@@ -1193,29 +1184,21 @@ function updateBanner(event) {
   const focusSubtitle = document.getElementById("focus-subtitle");
   const meta = document.getElementById("focus-meta");
   const scene = currentScene();
+  const selectedAgv = selectedAgvId(scene);
   const focus = focusDescriptor(currentFrame(), event);
   updateStageBadges(event);
 
   if (!scene) {
-    if (replay.followAgvId) {
-      eyebrow.textContent = "AGV Focus";
-      title.textContent = `跟随 ${replay.followAgvId}`;
-      desc.textContent = "当前没有激活高层场景，主画面保持巡航，并持续高亮你选中的 AGV 全局路径和子任务点。";
-      focusTitle.textContent = `AGV ${replay.followAgvId}`;
-      focusSubtitle.textContent = "点击右侧 AGV 卡片后，这里会保持聚焦显示。";
-    } else {
-      eyebrow.textContent = "Replay";
-      title.textContent = "等待场景";
-      desc.textContent = "正在根据回放时间定位高层场景。";
-      focusTitle.textContent = "场景说明";
-      focusSubtitle.textContent = "当前没有激活的场景。";
-    }
+    eyebrow.textContent = "Replay";
+    title.textContent = "等待场景";
+    desc.textContent = "正在根据回放时间定位高层场景。";
+    focusTitle.textContent = "场景说明";
+    focusSubtitle.textContent = "当前没有激活的场景。";
     const idleItems = [];
-    if (replay.followAgvId) idleItems.push(`<span class="pill">已选 AGV ${escapeHtml(replay.followAgvId)}</span>`);
     idleItems.push(`<span class="pill">${replay.autoMainCamera ? "自动镜头" : "手动镜头"}</span>`);
     idleItems.push(`<span class="pill">${replay.showBridges ? "桥区显示中" : "桥区隐藏"}</span>`);
     meta.innerHTML = idleItems.join("");
-    const detailKey = `none:${replay.followAgvId}`;
+    const detailKey = "none";
     if (replay.ui.lastDetailKey !== detailKey) {
       renderDetailCards(null);
       replay.ui.lastDetailKey = detailKey;
@@ -1236,12 +1219,12 @@ function updateBanner(event) {
   for (const nid of focus.nodeIds) {
     items.push(`<span class="pill">节点 N${escapeHtml(nid)}</span>`);
   }
-  if (replay.followAgvId) {
-    items.push(`<span class="pill">高亮 Path: ${escapeHtml(replay.followAgvId)}</span>`);
+  if (selectedAgv) {
+    items.push(`<span class="pill">已选 AGV ${escapeHtml(selectedAgv)}</span>`);
   }
   items.push(`<span class="pill">场景时段 ${formatTime(scene.start_s)} - ${formatTime(scene.end_s)}</span>`);
   meta.innerHTML = items.join("");
-  const detailKey = `${scene.scene_id}:${replay.followAgvId}`;
+  const detailKey = `${scene.scene_id}:${selectedAgv}`;
   if (replay.ui.lastDetailKey !== detailKey) {
     renderDetailCards(scene);
     replay.ui.lastDetailKey = detailKey;
@@ -1303,64 +1286,6 @@ function refreshButtons() {
   if (stepButton) {
     stepButton.textContent = "禁止跳播";
   }
-}
-
-function bindDragScroll(pane) {
-  if (!pane || pane.dataset.scrollBound === "1") return;
-  pane.dataset.scrollBound = "1";
-  let dragging = false;
-  let pointerId = null;
-  let startY = 0;
-  let startScrollTop = 0;
-  let moved = false;
-  pane.addEventListener("pointerdown", (event) => {
-    if (event.target.closest("[data-scene-id]") || event.target.closest("[data-agv-id]")) {
-      return;
-    }
-    dragging = true;
-    moved = false;
-    pointerId = event.pointerId;
-    startY = event.clientY;
-    startScrollTop = pane.scrollTop;
-    pane.classList.add("dragging");
-    pane.setPointerCapture(event.pointerId);
-  });
-  pane.addEventListener("pointermove", (event) => {
-    if (!dragging || pointerId !== event.pointerId) return;
-    const deltaY = event.clientY - startY;
-    if (Math.abs(deltaY) > 4) moved = true;
-    pane.scrollTop = startScrollTop - deltaY;
-  });
-  const stopDrag = (event) => {
-    if (!dragging) return;
-    if (event?.pointerId !== undefined && pointerId !== event.pointerId) return;
-    dragging = false;
-    pointerId = null;
-    pane.classList.remove("dragging");
-  };
-  pane.addEventListener("pointerup", stopDrag);
-  pane.addEventListener("pointercancel", stopDrag);
-  pane.addEventListener(
-    "click",
-    (event) => {
-      if (moved) {
-        event.preventDefault();
-        event.stopPropagation();
-      }
-    },
-    true
-  );
-}
-
-function populateFollowSelect() {
-  const select = document.getElementById("follow-select");
-  if (!select) return;
-  const options = ['<option value="">自动镜头</option>'];
-  for (const agvId of allAgvIds()) {
-    options.push(`<option value="${agvId}">跟随 AGV ${agvId}</option>`);
-  }
-  select.innerHTML = options.join("");
-  select.value = replay.followAgvId;
 }
 
 function setAutoMainCamera(enabled) {
@@ -1428,13 +1353,24 @@ function jumpBy(deltaS) {
 function jumpEvent(direction) {
   if (!replay.scenes.length) return;
   const currentTime = replay.currentTimeS;
+  const keepPlaying = replay.playing;
   if (direction > 0) {
     const next = replay.scenes.find((item) => Number(item.start_s || 0) > currentTime + 0.001);
     if (next) {
-      seekToTime(Number(next.start_s || 0), { pause: true, snapCamera: true, autoSnap: true, forceEventList: true });
+      seekToTime(Number(next.start_s || 0), {
+        pause: !keepPlaying,
+        snapCamera: true,
+        autoSnap: true,
+        forceEventList: true,
+      });
       return;
     }
-    seekToTime(replay.totalTimeS, { pause: true, snapCamera: true, autoSnap: true, forceEventList: true });
+    seekToTime(replay.totalTimeS, {
+      pause: !keepPlaying,
+      snapCamera: true,
+      autoSnap: true,
+      forceEventList: true,
+    });
     return;
   }
 
@@ -1443,7 +1379,12 @@ function jumpEvent(direction) {
     if (Number(item.start_s || 0) >= currentTime - 0.001) break;
     prev = item;
   }
-  seekToTime(Number(prev.start_s || 0), { pause: true, snapCamera: true, autoSnap: true, forceEventList: true });
+  seekToTime(Number(prev.start_s || 0), {
+    pause: !keepPlaying,
+    snapCamera: true,
+    autoSnap: true,
+    forceEventList: true,
+  });
 }
 
 function render(options = {}) {
@@ -1467,14 +1408,6 @@ function render(options = {}) {
   document.getElementById("time-label").textContent = `${formatTime(replay.currentTimeS)} / ${formatTime(replay.totalTimeS)}`;
 }
 
-function nextSceneAfter(timeS) {
-  if (!Array.isArray(replay.scenes)) return null;
-  for (const scene of replay.scenes) {
-    if (Number(scene.start_s || 0) > timeS + 0.5) return scene;
-  }
-  return null;
-}
-
 function tick(ts) {
   if (!replay.lastTickTs) replay.lastTickTs = ts;
   const dt = Math.min(0.1, Math.max(0, (ts - replay.lastTickTs) / 1000));
@@ -1483,23 +1416,6 @@ function tick(ts) {
     const speed = effectiveSpeed();
     const prevSceneId = currentScene()?.scene_id || "";
     replay.currentTimeS += dt * speed;
-
-    // Auto-director: skip gaps between scenes (jump to next scene start)
-    let jumped = false;
-    if (replay.autoDirector) {
-      const scene = currentSceneAt(replay.currentTimeS);
-      if (!scene) {
-        const next = nextSceneAfter(replay.currentTimeS);
-        if (next) {
-          const nextStart = Number(next.start_s || 0);
-          const gap = nextStart - replay.currentTimeS;
-          if (gap > 2.0) {
-            replay.currentTimeS = nextStart - 1.0;
-            jumped = true;
-          }
-        }
-      }
-    }
 
     if (replay.currentTimeS >= replay.totalTimeS) {
       replay.currentTimeS = replay.totalTimeS;
@@ -1510,11 +1426,7 @@ function tick(ts) {
     // Snap camera when entering a new scene
     const newSceneId = currentScene()?.scene_id || "";
     const sceneChanged = newSceneId && newSceneId !== prevSceneId;
-    if (sceneChanged || jumped) {
-      // Auto-clear user selection so scene's own focus AGVs take over
-      if (sceneChanged && replay.autoDirector) {
-        replay.followAgvId = "";
-      }
+    if (sceneChanged) {
       render({ autoSnap: true, forceEventList: true });
     } else {
       render();
@@ -1620,6 +1532,10 @@ function bindUi() {
     replay.showBridges = event.target.checked;
     render();
   });
+  document.getElementById("toggle-node-ids").addEventListener("change", (event) => {
+    replay.showNodeIds = event.target.checked;
+    render({ snapCamera: true });
+  });
   document.getElementById("event-list").addEventListener("click", (event) => {
     if (!(event.target instanceof Element)) return;
     const item = event.target.closest("[data-scene-id]");
@@ -1627,18 +1543,28 @@ function bindUi() {
     const sceneId = String(item.getAttribute("data-scene-id") || "");
     const scene = replay.scenes.find((entry) => String(entry.scene_id) === sceneId);
     if (!scene) return;
-    seekToTime(Number(scene.start_s || 0), { pause: true, snapCamera: true, autoSnap: true, forceEventList: true });
+    const keepPlaying = replay.playing;
+    seekToTime(Number(scene.start_s || 0), {
+      pause: !keepPlaying,
+      snapCamera: true,
+      autoSnap: true,
+      forceEventList: true,
+    });
   });
   document.getElementById("detail-content").addEventListener("click", (event) => {
     if (!(event.target instanceof Element)) return;
+    const scene = currentScene();
+    if (!sceneSupportsAgvSelection(scene)) return;
     const button = event.target.closest("[data-agv-id]");
     if (!button) return;
     const agvId = String(button.getAttribute("data-agv-id") || "");
     if (!agvId) return;
-    replay.followAgvId = replay.followAgvId === agvId ? "" : agvId;
-    if (replay.followAgvId) {
+    const selectedAgv = selectedAgvId(scene);
+    setSelectedAgvId(selectedAgv === agvId ? "" : agvId, scene);
+    const nextSelectedAgv = selectedAgvId(scene);
+    if (nextSelectedAgv) {
       const frame = currentFrame();
-      const agv = frame.agvs.find((a) => String(a.id) === replay.followAgvId);
+      const agv = frame.agvs.find((a) => String(a.id) === nextSelectedAgv);
       if (agv && Number.isFinite(Number(agv.x)) && Number.isFinite(Number(agv.y))) {
         replay.mainCamera.centerX = Number(agv.x);
         replay.mainCamera.centerY = Number(agv.y);
@@ -1653,7 +1579,6 @@ function bindUi() {
 
   bindCanvasInteractions();
   bindKeyboard();
-  bindDragScroll(document.getElementById("detail-content"));
 }
 
 function initializeCameras() {
@@ -1694,10 +1619,9 @@ async function loadBundle() {
   replay.ui.activeSceneId = "";
   replay.ui.lastScrolledSceneId = "";
   replay.ui.lastDetailKey = "";
-  replay.followAgvId = "";
+  replay.selectedAgvByScene = {};
   document.title = `AGV 导演版回放 - ${data.metadata?.session_name || "session"}`;
   initializeCameras();
-  populateFollowSelect();
   const bridgeToggle = document.getElementById("toggle-bridges");
   if (bridgeToggle) {
     const hasBridges = Array.isArray(replay.map?.bridgeNodeIds) && replay.map.bridgeNodeIds.length > 0;
@@ -1710,7 +1634,10 @@ async function loadBundle() {
       bridgeToggle.checked = true;
     }
   }
-  bindDragScroll(document.getElementById("event-list"));
+  const nodeIdToggle = document.getElementById("toggle-node-ids");
+  if (nodeIdToggle) {
+    nodeIdToggle.checked = Boolean(replay.showNodeIds);
+  }
 }
 
 async function main() {

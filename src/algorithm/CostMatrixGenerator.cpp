@@ -112,6 +112,8 @@ static std::vector<std::vector<std::vector<double>>> generateCostMatrixImpl(
     int topKNext  = getenv_int("ALLOC_TOPK_NEXT",  getenv_int("ALLOC_TOPK", defaultTopK));
     topKAgent = std::min(std::max(1, topKAgent), taskNum);
     topKNext  = std::min(std::max(1, topKNext),  taskNum);
+    int minCoverAmrs = getenv_int("ALLOC_TOPK_COVERAGE_AMRS", (amrNum > 1 ? 2 : 1));
+    minCoverAmrs = std::min(std::max(1, minCoverAmrs), std::max(1, amrNum));
 
     // 针对性充电任务：若某AMR在任务列表中存在专门指派的充电任务（taskType==3且deviceIds包含该AMR），
     // 则该AMR对非充电任务的成本强制为INF（不赋值）
@@ -661,21 +663,24 @@ static std::vector<std::vector<std::vector<double>>> generateCostMatrixImpl(
         }
     }
 
-    // 覆盖纠偏：避免任务被Top-K饿死。若某个任务对所有AMR都为INF，则强制为该任务选择一个最近AMR计算首段
-    // 仅在满足可执行约束的AMR内选择，保持语义正确。
+    // 覆盖纠偏：避免任务被 Top-K 饿死。默认至少为每个任务保留 2 个首段 AGV 候选，
+    // 否则可行域会被先验裁成“单车专属任务”，后续 makespan 再好也没法把任务摊开。
     int ensureCover = getenv_int("ALLOC_TOPK_COVERAGE", 1);
     if (ensureCover > 0) {
         for (int t = 0; t < taskNum; ++t) {
             if (taskStartIdList[t] < 0) continue;
-            bool covered = false;
+            int coveredCount = 0;
             for (int a = 0; a < amrNum; ++a) {
-                if (TaskAllocationUtils::getCost(taskNum, t, a) < INF) { covered = true; break; }
+                if (TaskAllocationUtils::getCost(taskNum, t, a) < INF) ++coveredCount;
             }
-            if (covered) continue;
-            // 选择最近且可执行的AMR
-            int bestAmr = -1; double bestApprox = std::numeric_limits<double>::infinity();
+            if (coveredCount >= minCoverAmrs) continue;
+            const int needExtra = minCoverAmrs - coveredCount;
+            // 为当前任务补足额外可行 AGV 候选。
+            std::vector<std::pair<int, double>> cand;
+            cand.reserve(amrNum);
             auto [tx, ty] = taskStartXY[t];
             for (int a = 0; a < amrNum; ++a) {
+                if (TaskAllocationUtils::getCost(taskNum, t, a) < INF) continue;
                 const Amr& amr = amrList[a];
                 if (!CostMatrixGenerator::isTaskValid(amr, taskList[t])) continue;
                 if (forceCharge[a] && taskList[t].getTaskType() != 3) continue;
@@ -684,32 +689,55 @@ static std::vector<std::vector<std::vector<double>>> generateCostMatrixImpl(
                 try { const Node& an = mapInfo.getNodeById(sId); (void)an; } catch(...) { continue; }
                 const Node& an = mapInfo.getNodeById(sId);
                 double dx = an.x - tx, dy = an.y - ty;
-                double approx = (std::abs(dx) + std::abs(dy)) / globalSpeed;
-                if (approx < bestApprox) { bestApprox = approx; bestAmr = a; }
+                double approxMs = ((std::abs(dx) + std::abs(dy)) / globalSpeed) * kMsPerSec;
+                double offset = 0.0;
+                if (startTimeOffsetMs && (int)startTimeOffsetMs->size() == amrNum) {
+                    offset = (*startTimeOffsetMs)[a];
+                }
+                cand.emplace_back(a, apply_task_adjustment(t, approxMs + taskSvcMs[t] + offset));
             }
-            if (bestAmr != -1) {
+            if (cand.empty()) continue;
+            if ((int)cand.size() > needExtra) {
+                std::nth_element(
+                    cand.begin(),
+                    cand.begin() + needExtra,
+                    cand.end(),
+                    [](const auto& lhs, const auto& rhs) { return lhs.second < rhs.second; });
+                cand.resize(needExtra);
+            }
+            for (const auto& item : cand) {
+                int bestAmr = item.first;
                 int typ = amrTypeIndexVec[bestAmr];
-                int sId = amrStartId[bestAmr]; if (sId < 0) continue;
+                int sId = amrStartId[bestAmr];
+                if (sId < 0) continue;
                 double spMs = shortestPathUpdater.queryByNodeId(sId, taskStartIdList[t], typ);
                 if (spMs == static_cast<double>(DistanceState::UNREACHABLE)) continue;
                 if (spMs == static_cast<double>(DistanceState::UNCALCULATED) || !(spMs > 0.0)) {
                     // 回退几何近似
-                    auto [tx2, ty2] = taskStartXY[t]; const Node& an = mapInfo.getNodeById(sId);
-                    double dx = an.x - tx2, dy = an.y - ty2; double dist = std::abs(dx) + std::abs(dy);
-                    double speedNodes = globalSpeed; if (an.maxSpeed > 0) speedNodes = std::min(speedNodes, an.maxSpeed);
-                    const Node& tn = mapInfo.getNodeById(taskStartIdList[t]); if (tn.maxSpeed > 0) speedNodes = std::min(speedNodes, tn.maxSpeed);
+                    auto [tx2, ty2] = taskStartXY[t];
+                    const Node& an = mapInfo.getNodeById(sId);
+                    double dx = an.x - tx2, dy = an.y - ty2;
+                    double dist = std::abs(dx) + std::abs(dy);
+                    double speedNodes = globalSpeed;
+                    if (an.maxSpeed > 0) speedNodes = std::min(speedNodes, an.maxSpeed);
+                    const Node& tn = mapInfo.getNodeById(taskStartIdList[t]);
+                    if (tn.maxSpeed > 0) speedNodes = std::min(speedNodes, tn.maxSpeed);
                     double amrSpeed = amrList[bestAmr].getMaxLinearVelocity() > 0 ? amrList[bestAmr].getMaxLinearVelocity() : globalSpeed;
-                    double effSpeed = std::min(speedNodes, amrSpeed); if (effSpeed <= 0) effSpeed = globalSpeed;
+                    double effSpeed = std::min(speedNodes, amrSpeed);
+                    if (effSpeed <= 0) effSpeed = globalSpeed;
                     spMs = (dist / effSpeed) * kMsPerSec;
                 } else {
                     spMs *= kMsPerSec;
                 }
-                double offset = 0.0; if (startTimeOffsetMs && (int)startTimeOffsetMs->size()==amrNum) offset = (*startTimeOffsetMs)[bestAmr];
-            double val = spMs + taskSvcMs[t] + offset;
-            val = apply_task_adjustment(t, val);
-            TaskAllocationUtils::sparsePut(taskNum, t, bestAmr, val);
+                double offset = 0.0;
+                if (startTimeOffsetMs && (int)startTimeOffsetMs->size() == amrNum) {
+                    offset = (*startTimeOffsetMs)[bestAmr];
+                }
+                double val = spMs + taskSvcMs[t] + offset;
+                val = apply_task_adjustment(t, val);
+                TaskAllocationUtils::sparsePut(taskNum, t, bestAmr, val);
+            }
         }
-    }
     }
 
     // 2. 生成 task→task 转移成本，直接写入 costMatrix[i][j][amr]

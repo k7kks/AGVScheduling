@@ -7,7 +7,7 @@
     <style>
       :root {
         --bg: #07111f;
-        --panel: rgba(8, 18, 31, 0.84);
+        --panel: rgba(5, 13, 23, 0.75);
         --line: rgba(255, 255, 255, 0.08);
         --text: #eef4ff;
         --muted: #9bb1d0;
@@ -46,6 +46,21 @@
         background: rgba(255, 255, 255, 0.28);
         background-clip: padding-box;
       }
+      @keyframes neonPulse {
+        0% { box-shadow: 0 0 10px rgba(46, 196, 182, 0.4), inset 0 0 5px rgba(46, 196, 182, 0.2); }
+        50% { box-shadow: 0 0 20px rgba(46, 196, 182, 0.8), inset 0 0 15px rgba(46, 196, 182, 0.4); }
+        100% { box-shadow: 0 0 10px rgba(46, 196, 182, 0.4), inset 0 0 5px rgba(46, 196, 182, 0.2); }
+      }
+      @keyframes neonPulseWarn {
+        0% { box-shadow: 0 0 15px rgba(255, 159, 67, 0.3), inset 0 0 8px rgba(255, 159, 67, 0.1); }
+        50% { box-shadow: 0 0 25px rgba(255, 159, 67, 0.6), inset 0 0 15px rgba(255, 159, 67, 0.3); }
+        100% { box-shadow: 0 0 15px rgba(255, 159, 67, 0.3), inset 0 0 8px rgba(255, 159, 67, 0.1); }
+      }
+      @keyframes borderGlow {
+        0% { border-color: rgba(46, 196, 182, 0.3); }
+        50% { border-color: rgba(46, 196, 182, 0.8); }
+        100% { border-color: rgba(46, 196, 182, 0.3); }
+      }
 
       body {
         margin: 0;
@@ -60,7 +75,7 @@
 
       #app {
         display: grid;
-        grid-template-columns: 380px minmax(0, 1fr) 420px;
+        grid-template-columns: 340px minmax(0, 1fr) 360px;
         gap: 16px;
         height: 100vh;
         min-height: 100vh;
@@ -69,11 +84,11 @@
 
       .panel {
         background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 24px;
-        box-shadow: var(--shadow);
+        border: 1px solid rgba(46, 196, 182, 0.25);
+        border-radius: 20px;
+        box-shadow: 0 0 30px rgba(0, 0, 0, 0.5), inset 0 0 15px rgba(46, 196, 182, 0.05);
         overflow: hidden;
-        backdrop-filter: blur(18px);
+        backdrop-filter: blur(20px);
         min-width: 0;
       }
 
@@ -95,16 +110,18 @@
 
       .eyebrow {
         font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.14em;
+        font-weight: 800;
+        letter-spacing: 0.18em;
         text-transform: uppercase;
-        color: #ffca8a;
+        color: #72efdd;
+        text-shadow: 0 0 8px rgba(114, 239, 221, 0.5);
       }
 
       h1 {
         margin: 10px 0 8px 0;
         font-size: 28px;
         line-height: 1.15;
+        text-shadow: 0 0 15px rgba(238, 244, 255, 0.4);
       }
 
       .subtitle {
@@ -151,11 +168,16 @@
         appearance: none;
         border: 1px solid var(--line);
         border-radius: 14px;
-        background: rgba(255, 255, 255, 0.08);
+        background: rgba(46, 196, 182, 0.1); border: 1px solid rgba(46, 196, 182, 0.3); box-shadow: 0 0 10px rgba(46, 196, 182, 0.2) inset;
         color: var(--text);
         padding: 11px 14px;
         font-size: 13px;
         font-weight: 700;
+      }
+
+      #speed-select {
+        text-align: center;
+        text-align-last: center;
       }
 
       .btn {
@@ -165,7 +187,12 @@
       .btn.primary {
         background: linear-gradient(135deg, #2ec4b6 0%, #2b90d9 100%);
         color: #031019;
-        border-color: transparent;
+        border: 1px solid #72efdd;
+        box-shadow: 0 0 15px rgba(46, 196, 182, 0.6);
+        text-shadow: 0 0 5px rgba(255,255,255,0.5);
+      }
+      .btn.primary:hover {
+        box-shadow: 0 0 25px rgba(46, 196, 182, 0.9);
       }
 
       .btn.subtle {
@@ -183,7 +210,8 @@
       }
 
       .toggle input {
-        accent-color: var(--warn);
+        accent-color: var(--accent);
+        filter: drop-shadow(0 0 5px var(--accent));
       }
 
       .section-title {
@@ -219,15 +247,15 @@
       .scene-item:hover {
         transform: translateY(-1px);
         box-shadow: 0 14px 28px rgba(0, 0, 0, 0.2);
-        background: rgba(255, 255, 255, 0.08);
+        background: rgba(46, 196, 182, 0.1); border: 1px solid rgba(46, 196, 182, 0.3); box-shadow: 0 0 10px rgba(46, 196, 182, 0.2) inset;
         border-left-color: rgba(255, 159, 67, 0.7);
       }
 
       .scene-item.active {
-        border-color: rgba(255, 159, 67, 0.75);
+        border-color: rgba(255, 159, 67, 0.9);
         border-left-color: #ff9f43;
-        background: rgba(255, 159, 67, 0.16);
-        box-shadow: 0 8px 24px rgba(255, 159, 67, 0.12);
+        background: rgba(255, 159, 67, 0.2);
+        animation: neonPulseWarn 2s infinite ease-in-out;
       }
 
       .scene-index {
@@ -237,10 +265,12 @@
         width: 32px;
         height: 32px;
         border-radius: 999px;
-        background: rgba(255, 159, 67, 0.18);
-        font-size: 13px;
-        font-weight: 800;
-        color: #ffd6a8;
+        background: rgba(255, 159, 67, 0.25);
+        font-size: 14px;
+        font-weight: 900;
+        color: #ffca8a;
+        border: 1px solid rgba(255, 159, 67, 0.4);
+        box-shadow: 0 0 10px rgba(255, 159, 67, 0.3);
       }
 
       .scene-top {
@@ -251,15 +281,18 @@
 
       .scene-time {
         margin-top: 10px;
-        font-size: 11px;
+        font-size: 12px;
         color: #ffca8a;
-        font-weight: 700;
+        font-weight: 800;
+        font-family: "JetBrains Mono", "SFMono-Regular", monospace;
+        letter-spacing: 0.05em;
       }
 
       .scene-title {
         margin-top: 10px;
-        font-size: 16px;
-        font-weight: 800;
+        font-size: 17px;
+        font-weight: 900;
+        text-shadow: 0 0 5px rgba(255,255,255,0.2);
       }
 
       .scene-subtitle {
@@ -279,9 +312,15 @@
         height: calc(100vh - 124px);
         display: block;
         background:
-          radial-gradient(circle at 25% 20%, rgba(46, 196, 182, 0.14), transparent 30%),
-          radial-gradient(circle at 82% 82%, rgba(255, 159, 67, 0.14), transparent 34%),
+          linear-gradient(rgba(46, 196, 182, 0.05) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(46, 196, 182, 0.05) 1px, transparent 1px),
+          radial-gradient(circle at 25% 20%, rgba(46, 196, 182, 0.14), transparent 40%),
+          radial-gradient(circle at 82% 82%, rgba(255, 159, 67, 0.14), transparent 40%),
           #05101c;
+        background-size: 30px 30px, 30px 30px, 100% 100%, 100% 100%, 100% 100%;
+        background-position: center center;
+        border-radius: 20px;
+        box-shadow: inset 0 0 50px rgba(0, 0, 0, 0.8);
         cursor: grab;
       }
 
@@ -304,16 +343,18 @@
       #banner {
         max-width: 560px;
         padding: 16px 18px;
-        border-radius: 20px;
-        background: rgba(5, 13, 23, 0.82);
-        border: 1px solid var(--line);
-        box-shadow: 0 16px 28px rgba(0, 0, 0, 0.22);
+        border-radius: 16px;
+        background: rgba(5, 13, 23, 0.65);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(46, 196, 182, 0.4);
+        box-shadow: 0 16px 28px rgba(0, 0, 0, 0.4), inset 0 0 20px rgba(46, 196, 182, 0.1);
       }
 
       #banner .title {
         margin-top: 8px;
         font-size: 28px;
         font-weight: 900;
+        text-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
       }
 
       #banner .desc {
@@ -334,11 +375,13 @@
       #camera-badge {
         padding: 10px 14px;
         border-radius: 999px;
-        background: rgba(5, 13, 23, 0.82);
-        border: 1px solid var(--line);
+        background: rgba(5, 13, 23, 0.65);
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(46, 196, 182, 0.4);
         font-size: 13px;
         font-weight: 800;
-        box-shadow: 0 12px 20px rgba(0, 0, 0, 0.18);
+        color: #72efdd;
+        box-shadow: 0 12px 20px rgba(0, 0, 0, 0.4), inset 0 0 10px rgba(46, 196, 182, 0.1);
       }
 
       #transport {
@@ -352,9 +395,10 @@
         align-items: center;
         padding: 14px;
         border-radius: 20px;
-        background: rgba(5, 13, 23, 0.88);
-        border: 1px solid var(--line);
-        box-shadow: 0 14px 30px rgba(0, 0, 0, 0.18);
+        background: rgba(5, 13, 23, 0.75);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(46, 196, 182, 0.3);
+        box-shadow: 0 14px 30px rgba(0, 0, 0, 0.5), inset 0 0 20px rgba(46, 196, 182, 0.08);
       }
 
       .transport-actions {
@@ -385,9 +429,10 @@
       }
 
       #focus-title {
-        font-size: 22px;
+        font-size: 24px;
         font-weight: 900;
         min-height: 28px;
+        text-shadow: 0 0 8px rgba(255, 255, 255, 0.3);
       }
 
       #focus-subtitle {
@@ -413,9 +458,10 @@
       .detail-card {
         margin-bottom: 14px;
         padding: 16px;
-        border-radius: 18px;
-        background: rgba(255, 255, 255, 0.04);
-        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: rgba(46, 196, 182, 0.05);
+        border: 1px solid rgba(46, 196, 182, 0.2);
+        box-shadow: inset 0 0 15px rgba(0, 0, 0, 0.3);
       }
 
       .detail-card-title {
@@ -447,8 +493,14 @@
       .task-row,
       .path-row {
         padding: 11px 12px;
-        border-radius: 14px;
-        background: rgba(255, 255, 255, 0.06);
+        border-radius: 12px;
+        background: rgba(5, 13, 23, 0.5);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        transition: background 150ms ease;
+      }
+      .task-row:hover,
+      .path-row:hover {
+        background: rgba(46, 196, 182, 0.1);
       }
 
       .task-row {
@@ -479,7 +531,7 @@
       }
 
       .status-tag {
-        background: rgba(255, 255, 255, 0.08);
+        background: rgba(46, 196, 182, 0.1); border: 1px solid rgba(46, 196, 182, 0.3); box-shadow: 0 0 10px rgba(46, 196, 182, 0.2) inset;
         color: #dbe7fa;
       }
 
@@ -522,6 +574,7 @@
       .assignment-button.active {
         border-color: rgba(255, 159, 67, 0.65);
         background: rgba(255, 159, 67, 0.14);
+        box-shadow: 0 0 0 1px rgba(255, 159, 67, 0.18), inset 0 0 22px rgba(255, 159, 67, 0.12);
       }
 
       .assignment-button:disabled {
@@ -635,7 +688,7 @@
         <div class="section">
           <div class="eyebrow">Leader Replay</div>
           <h1>调度演示回放</h1>
-          <div class="subtitle">点击左侧场景卡片跳转到关键时刻，选中 AGV 可高亮路径。</div>
+          <div class="subtitle">连续回放真实仿真时间轴，非重点时段自动快进；任务分配场景点击 AGV 会高亮到首个子任务点的路径。</div>
           <div class="badges" id="top-badges"></div>
         </div>
 
@@ -657,11 +710,15 @@
             <span>显示桥区域</span>
             <input id="toggle-bridges" type="checkbox" checked />
           </label>
+          <label class="toggle">
+            <span>显示节点ID</span>
+            <input id="toggle-node-ids" type="checkbox" />
+          </label>
         </div>
 
         <div class="section">
           <div class="section-title">Scenes</div>
-          <div class="section-note">这里只显示 5 个核心场景，不显示零碎小事件。</div>
+          <div class="section-note">只保留连续时间轴上的关键场景，非重点区间自动巡航跳过。</div>
         </div>
         <div id="event-list"></div>
       </aside>

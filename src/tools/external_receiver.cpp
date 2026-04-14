@@ -236,7 +236,6 @@ struct PlanRuntimeState {
     std::set<int> tempBlockedNodes;
     std::set<std::pair<int,int>> tempBlockedEdges;
     std::chrono::steady_clock::time_point tempBlockedUntil{};
-    std::chrono::steady_clock::time_point blockedSince{};
     std::string blockedByAgvId;
     int blockedByNodeId = -1;
     std::string blockedByReason;
@@ -409,7 +408,6 @@ public:
             rt.tempBlockedNodes = existingRt->second.tempBlockedNodes;
             rt.tempBlockedEdges = existingRt->second.tempBlockedEdges;
             rt.tempBlockedUntil = existingRt->second.tempBlockedUntil;
-            rt.blockedSince = existingRt->second.blockedSince;
             rt.blockedByAgvId = existingRt->second.blockedByAgvId;
             rt.blockedByNodeId = existingRt->second.blockedByNodeId;
             rt.blockedByReason = existingRt->second.blockedByReason;
@@ -603,7 +601,6 @@ public:
             progressed = true;
         }
         if (progressed) {
-            rt.blockedSince = std::chrono::steady_clock::time_point{};
             rt.tempGoalNodeId = -1;
             rt.lastFirstHopFromNodeId = -1;
             rt.lastFirstHopNodeId = -1;
@@ -657,7 +654,6 @@ public:
         stored.tempBlockedNodes = state.tempBlockedNodes;
         stored.tempBlockedEdges = state.tempBlockedEdges;
         stored.tempBlockedUntil = state.tempBlockedUntil;
-        stored.blockedSince = state.blockedSince;
         stored.blockedByAgvId = state.blockedByAgvId;
         stored.blockedByNodeId = state.blockedByNodeId;
         stored.blockedByReason = state.blockedByReason;
@@ -932,7 +928,6 @@ public:
             rt.tempBlockedNodes.clear();
             rt.tempBlockedEdges.clear();
             rt.tempBlockedUntil = std::chrono::steady_clock::time_point{};
-            rt.blockedSince = std::chrono::steady_clock::time_point{};
             rt.blockedByAgvId.clear();
             rt.blockedByNodeId = -1;
             rt.blockedByReason.clear();
@@ -1157,7 +1152,17 @@ static bool handle_map_info(const json& j,
                             std::atomic<int>& mapId);
 static double reserve_near_conflict_threshold_mm();
 static std::vector<int> build_bridge_rule_node_ids(const MapInfo& mapInfo);
-static std::vector<std::vector<int>> detect_corridor_groups(
+struct CorridorGroupInfo {
+    std::string resourceKey;
+    std::vector<int> nodeIds;
+    std::vector<int> lowSideEntryNodes;
+    std::vector<int> highSideEntryNodes;
+    bool isBridge = false;
+    bool isStraight = false;
+    bool isHorizontal = false;
+    int sameDirectionCapacity = 1;
+};
+static std::vector<CorridorGroupInfo> detect_corridor_groups(
     const MapInfo& mapInfo, const std::vector<int>& bridgeNodeIds);
 
 struct MapRuntimeContext {
@@ -1187,9 +1192,9 @@ struct MapRuntimeContext {
     int mapId = 0;
     std::string mapVersion;
     std::vector<int> bridgeRuleNodeIds;
-    // Per-corridor groups: each group is independently enforced (if any node
-    // in the group is occupied by another AGV, all nodes in the group are banned).
-    std::vector<std::vector<int>> corridorGroups;
+    // Per-corridor groups are enforced independently. Straight bridge groups can
+    // admit limited same-direction flow; all other groups remain mutex-style.
+    std::vector<CorridorGroupInfo> corridorGroups;
     std::shared_mutex mapMutex;
     std::atomic<bool> mapReady;
     std::atomic<long long> mapEpoch;
@@ -1536,7 +1541,7 @@ static bool reload_context_map_payload(const json& j,
         ctx.corridorGroups = detect_corridor_groups(*ctx.mapInfoPtr, ctx.bridgeRuleNodeIds);
         if (!ctx.corridorGroups.empty()) {
             int totalNodes = 0;
-            for (const auto& g : ctx.corridorGroups) totalNodes += static_cast<int>(g.size());
+            for (const auto& g : ctx.corridorGroups) totalNodes += static_cast<int>(g.nodeIds.size());
             std::cout << log_time_prefix()
                       << "[Map] corridor groups=" << ctx.corridorGroups.size()
                       << " totalNodes=" << totalNodes
@@ -2601,7 +2606,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
     ReplanStage stage,
     bool* updatedOut,
     bool* usedTempGoalOut = nullptr,
-    const std::vector<std::vector<int>>* corridorGroups = nullptr);
+    const std::vector<CorridorGroupInfo>* corridorGroups = nullptr);
 
 static void processSchedulingMessage(
     json payload,
@@ -3075,6 +3080,7 @@ static void processSchedulingMessage(
 		                                 }
 		                             }
 		                             nodeReservations.releaseAllByOwnerExceptSet(plan.amrId, keepNodes);
+		                             nodeReservations.releaseAllDirectionalGroupsByOwnerExceptSet(plan.amrId, {});
 		                             int curTtlMs = 0;
 		                             nodeReservations.tryReserve(
 		                                 keepNodeId,
@@ -3140,6 +3146,7 @@ static void processSchedulingMessage(
 		                        }
 		                    }
 		                    nodeReservations.releaseAllByOwnerExceptSet(plan.amrId, keepNodes);
+		                    nodeReservations.releaseAllDirectionalGroupsByOwnerExceptSet(plan.amrId, {});
 		                    int curTtlMs = 0;
 		                    nodeReservations.tryReserve(
 		                        keepNodeId,
@@ -3391,7 +3398,7 @@ static void processSchedulingMessage(
             }
             posta.setRandomSeed(seedFromReq);
         }
-        posta.setCandidateCount(30);
+        posta.setCandidateCount(postaSE);
         posta.setBanShuffle(false);
         posta.setTimeLimit(remainSec);
         posta.setPriorityPenaltyCoeff(priCoeff);
@@ -3750,6 +3757,7 @@ static void processSchedulingMessage(
 		                        }
 		                    }
 		                    nodeReservations.releaseAllByOwnerExceptSet(plan.amrId, keepNodes);
+		                    nodeReservations.releaseAllDirectionalGroupsByOwnerExceptSet(plan.amrId, {});
 		                    int curTtlMs = 0;
 		                    nodeReservations.tryReserve(
 		                        keepNodeId,
@@ -5160,15 +5168,164 @@ static std::vector<int> build_bridge_rule_node_ids(const MapInfo& mapInfo) {
     return out;
 }
 
+static bool corridor_group_contains_node(const CorridorGroupInfo& group, int nodeId) {
+    return std::find(group.nodeIds.begin(), group.nodeIds.end(), nodeId) != group.nodeIds.end();
+}
+
+static bool corridor_group_contains_entry(const CorridorGroupInfo& group, int nodeId) {
+    return std::find(group.lowSideEntryNodes.begin(), group.lowSideEntryNodes.end(), nodeId) != group.lowSideEntryNodes.end()
+        || std::find(group.highSideEntryNodes.begin(), group.highSideEntryNodes.end(), nodeId) != group.highSideEntryNodes.end();
+}
+
+static bool corridor_group_contains_or_entry(const CorridorGroupInfo& group, int nodeId) {
+    return corridor_group_contains_node(group, nodeId) || corridor_group_contains_entry(group, nodeId);
+}
+
+static double corridor_group_axis_value(const MapInfo& mapInfo, int nodeId, bool horizontal) {
+    try {
+        const Node& node = mapInfo.getNodeById(nodeId);
+        return horizontal ? node.x : node.y;
+    } catch (...) {
+        return 0.0;
+    }
+}
+
+static int corridor_group_direction_between(const MapInfo& mapInfo,
+                                           const CorridorGroupInfo& group,
+                                           int fromNodeId,
+                                           int toNodeId) {
+    if (fromNodeId < 0 || toNodeId < 0) return 0;
+    const double eps = std::max(1.0, getenv_double("STRAIGHT_BRIDGE_DIR_EPS_MM", 20.0));
+    const double delta = corridor_group_axis_value(mapInfo, toNodeId, group.isHorizontal)
+        - corridor_group_axis_value(mapInfo, fromNodeId, group.isHorizontal);
+    if (delta > eps) return 1;
+    if (delta < -eps) return -1;
+    return 0;
+}
+
+static int infer_corridor_group_direction_from_route(const MapInfo& mapInfo,
+                                                     const CorridorGroupInfo& group,
+                                                     const std::vector<int>& route,
+                                                     int fallbackFrom = -1,
+                                                     int fallbackTo = -1) {
+    std::vector<int> context;
+    context.reserve(route.size());
+    for (int nodeId : route) {
+        if (nodeId < 0 || !corridor_group_contains_or_entry(group, nodeId)) continue;
+        if (context.empty() || context.back() != nodeId) context.push_back(nodeId);
+    }
+    if (context.size() >= 2) {
+        int sign = corridor_group_direction_between(mapInfo, group, context.front(), context.back());
+        if (sign != 0) return sign;
+        for (size_t i = 1; i < context.size(); ++i) {
+            sign = corridor_group_direction_between(mapInfo, group, context[i - 1], context[i]);
+            if (sign != 0) return sign;
+        }
+    }
+    return corridor_group_direction_between(mapInfo, group, fallbackFrom, fallbackTo);
+}
+
+static std::string make_corridor_group_resource_key(bool isBridge,
+                                                    const std::vector<int>& nodeIds) {
+    std::ostringstream oss;
+    oss << (isBridge ? "bridge:" : "corridor:");
+    for (size_t i = 0; i < nodeIds.size(); ++i) {
+        if (i > 0) oss << ",";
+        oss << nodeIds[i];
+    }
+    return oss.str();
+}
+
+static CorridorGroupInfo build_corridor_group_info(
+    const MapInfo& mapInfo,
+    const std::unordered_map<int, std::unordered_set<int>>& undirAdj,
+    const std::vector<int>& rawNodes,
+    bool isBridge) {
+    CorridorGroupInfo info;
+    info.isBridge = isBridge;
+    info.nodeIds = rawNodes;
+    std::sort(info.nodeIds.begin(), info.nodeIds.end());
+    info.nodeIds.erase(std::unique(info.nodeIds.begin(), info.nodeIds.end()), info.nodeIds.end());
+    if (info.nodeIds.empty()) return info;
+    info.resourceKey = make_corridor_group_resource_key(info.isBridge, info.nodeIds);
+
+    const double straightTolMm = std::max(1.0, getenv_double("STRAIGHT_BRIDGE_MINOR_SPAN_MM", 50.0));
+    double minX = 0.0, maxX = 0.0, minY = 0.0, maxY = 0.0;
+    bool first = true;
+    for (int nodeId : info.nodeIds) {
+        try {
+            const Node& node = mapInfo.getNodeById(nodeId);
+            if (first) {
+                minX = maxX = node.x;
+                minY = maxY = node.y;
+                first = false;
+            } else {
+                minX = std::min(minX, node.x);
+                maxX = std::max(maxX, node.x);
+                minY = std::min(minY, node.y);
+                maxY = std::max(maxY, node.y);
+            }
+        } catch (...) {
+        }
+    }
+    const double spanX = maxX - minX;
+    const double spanY = maxY - minY;
+    info.isHorizontal = spanX >= spanY;
+
+    std::vector<int> boundaryNodes;
+    for (int nodeId : info.nodeIds) {
+        auto it = undirAdj.find(nodeId);
+        if (it == undirAdj.end()) continue;
+        bool boundary = false;
+        for (int nbr : it->second) {
+            if (!corridor_group_contains_node(info, nbr)) {
+                boundary = true;
+                break;
+            }
+        }
+        if (boundary) boundaryNodes.push_back(nodeId);
+    }
+    std::sort(boundaryNodes.begin(), boundaryNodes.end(), [&](int lhs, int rhs) {
+        return corridor_group_axis_value(mapInfo, lhs, info.isHorizontal)
+            < corridor_group_axis_value(mapInfo, rhs, info.isHorizontal);
+    });
+
+    if (isBridge && boundaryNodes.size() >= 2 && std::min(spanX, spanY) <= straightTolMm) {
+        info.isStraight = true;
+        info.sameDirectionCapacity = std::max(1, getenv_int("STRAIGHT_BRIDGE_SAME_DIR_CAP", 2));
+        std::sort(info.nodeIds.begin(), info.nodeIds.end(), [&](int lhs, int rhs) {
+            return corridor_group_axis_value(mapInfo, lhs, info.isHorizontal)
+                < corridor_group_axis_value(mapInfo, rhs, info.isHorizontal);
+        });
+        const int lowBoundary = boundaryNodes.front();
+        const int highBoundary = boundaryNodes.back();
+        auto append_unique = [](std::vector<int>& out, int nodeId) {
+            if (nodeId < 0) return;
+            if (std::find(out.begin(), out.end(), nodeId) == out.end()) out.push_back(nodeId);
+        };
+        auto append_entries = [&](int boundaryNode, std::vector<int>& out) {
+            auto it = undirAdj.find(boundaryNode);
+            if (it == undirAdj.end()) return;
+            for (int nbr : it->second) {
+                if (corridor_group_contains_node(info, nbr)) continue;
+                append_unique(out, nbr);
+            }
+        };
+        append_entries(lowBoundary, info.lowSideEntryNodes);
+        append_entries(highBoundary, info.highSideEntryNodes);
+    }
+
+    return info;
+}
+
 // Detect narrow corridors: chains of degree-≤-2 nodes between junction nodes.
-// Each corridor group is independently enforced as a mutex (one AGV at a time).
 // Bridge nodes are grouped by connected components on the bridge subgraph.
-static std::vector<std::vector<int>> detect_corridor_groups(
+static std::vector<CorridorGroupInfo> detect_corridor_groups(
     const MapInfo& mapInfo,
     const std::vector<int>& bridgeNodeIds) {
 
     const int minCorridorLen = std::max(2, getenv_int("CORRIDOR_MIN_LENGTH", 3));
-    std::vector<std::vector<int>> groups;
+    std::vector<CorridorGroupInfo> groups;
 
     // Build undirected adjacency (shared by both steps)
     const auto& aftNode = mapInfo.getAftNode();
@@ -5187,9 +5344,6 @@ static std::vector<std::vector<int>> detect_corridor_groups(
         }
     }
 
-    // Step 1: group bridge nodes by connected components on the bridge subgraph.
-    // Only edges between two bridge nodes count — this ensures physically
-    // separate bridge segments are never merged into one group.
     if (!bridgeNodeIds.empty()) {
         std::unordered_set<int> bridgeSet(bridgeNodeIds.begin(), bridgeNodeIds.end());
         std::unordered_set<int> visited;
@@ -5200,47 +5354,42 @@ static std::vector<std::vector<int>> detect_corridor_groups(
             q.push_back(seed);
             visited.insert(seed);
             while (!q.empty()) {
-                int cur = q.front(); q.pop_front();
+                int cur = q.front();
+                q.pop_front();
                 component.push_back(cur);
                 auto adjIt = undirAdj.find(cur);
                 if (adjIt == undirAdj.end()) continue;
                 for (int nbr : adjIt->second) {
-                    if (visited.count(nbr) > 0) continue;
-                    if (bridgeSet.count(nbr) == 0) continue;
+                    if (visited.count(nbr) > 0 || bridgeSet.count(nbr) == 0) continue;
                     visited.insert(nbr);
                     q.push_back(nbr);
                 }
             }
             if (static_cast<int>(component.size()) >= minCorridorLen) {
-                groups.push_back(std::move(component));
+                groups.push_back(build_corridor_group_info(mapInfo, undirAdj, component, true));
             }
         }
     }
-    // Step 2: detect narrow corridors from topology (chains of degree-≤-2 nodes)
-    // Collect narrow nodes (undirected degree exactly 2)
+
     std::unordered_set<int> narrowNodes;
     for (const auto& kv : undirAdj) {
-        if (kv.second.size() == 2) {
-            narrowNodes.insert(kv.first);
-        }
+        if (kv.second.size() == 2) narrowNodes.insert(kv.first);
     }
-    // Already covered by bridge groups
     std::unordered_set<int> coveredNodes;
-    for (const auto& g : groups) {
-        for (int nid : g) coveredNodes.insert(nid);
+    for (const auto& group : groups) {
+        for (int nodeId : group.nodeIds) coveredNodes.insert(nodeId);
     }
-    // Trace chains of narrow nodes
+
     std::unordered_set<int> visited;
     for (int startNode : narrowNodes) {
-        if (visited.count(startNode) > 0) continue;
-        if (coveredNodes.count(startNode) > 0) continue;
-        // BFS/DFS along narrow nodes
+        if (visited.count(startNode) > 0 || coveredNodes.count(startNode) > 0) continue;
         std::vector<int> chain;
         std::deque<int> q;
         q.push_back(startNode);
         visited.insert(startNode);
         while (!q.empty()) {
-            int cur = q.front(); q.pop_front();
+            int cur = q.front();
+            q.pop_front();
             chain.push_back(cur);
             for (int nbr : undirAdj[cur]) {
                 if (visited.count(nbr) > 0) continue;
@@ -5251,11 +5400,128 @@ static std::vector<std::vector<int>> detect_corridor_groups(
             }
         }
         if (static_cast<int>(chain.size()) >= minCorridorLen) {
-            groups.push_back(std::move(chain));
+            groups.push_back(build_corridor_group_info(mapInfo, undirAdj, chain, false));
         }
     }
 
     return groups;
+}
+
+struct GroupReservationRequirement {
+    std::string resourceKey;
+    int direction = 0;
+    int sameDirectionCapacity = 1;
+    std::string detail;
+};
+
+static std::vector<GroupReservationRequirement> collect_group_reservation_requirements(
+    const MapInfo& mapInfo,
+    const std::vector<CorridorGroupInfo>& groups,
+    const std::vector<int>& route,
+    int currentNodeId,
+    int goalNodeId,
+    const NodeReservationTable& reservations,
+    const std::string& ownerAgvId) {
+    std::vector<GroupReservationRequirement> out;
+    if (groups.empty()) return out;
+
+    for (const auto& group : groups) {
+        bool touched = corridor_group_contains_node(group, currentNodeId);
+        if (!touched) {
+            for (int nodeId : route) {
+                if (corridor_group_contains_node(group, nodeId)) {
+                    touched = true;
+                    break;
+                }
+            }
+        }
+        if (!touched) continue;
+
+        GroupReservationRequirement req;
+        req.resourceKey = group.resourceKey;
+        req.sameDirectionCapacity =
+            (group.isBridge && group.isStraight) ? std::max(1, group.sameDirectionCapacity) : 1;
+        req.direction = 0;
+        if (group.isBridge && group.isStraight && req.sameDirectionCapacity > 1) {
+            req.direction = infer_corridor_group_direction_from_route(
+                mapInfo,
+                group,
+                route,
+                currentNodeId,
+                goalNodeId);
+            if (req.direction == 0) {
+                auto existing = reservations.getDirectionalGroupHold(group.resourceKey, ownerAgvId);
+                if (existing.has_value()) req.direction = existing->direction;
+            }
+        }
+        if (group.isBridge) {
+            req.detail = (req.direction > 0) ? "bridge_dir_pos"
+                       : (req.direction < 0) ? "bridge_dir_neg"
+                                             : "bridge_exclusive";
+        } else {
+            req.detail = "corridor_exclusive";
+        }
+        out.push_back(std::move(req));
+    }
+
+    std::sort(out.begin(), out.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.resourceKey < rhs.resourceKey;
+    });
+    out.erase(std::unique(out.begin(), out.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.resourceKey == rhs.resourceKey;
+    }), out.end());
+    return out;
+}
+
+static bool reserve_group_requirements(NodeReservationTable& reservations,
+                                       const std::string& ownerAgvId,
+                                       const std::vector<GroupReservationRequirement>& reqs,
+                                       std::chrono::milliseconds ttl,
+                                       NodeReservationTable::DirectionalGroupHoldEntry* blockerOut) {
+    if (blockerOut) *blockerOut = NodeReservationTable::DirectionalGroupHoldEntry{};
+    std::vector<std::string> acquiredNow;
+    for (const auto& req : reqs) {
+        const bool hadExisting = reservations.getDirectionalGroupHold(req.resourceKey, ownerAgvId).has_value();
+        if (reservations.tryReserveDirectionalGroup(req.resourceKey,
+                                                    ownerAgvId,
+                                                    req.direction,
+                                                    req.sameDirectionCapacity,
+                                                    req.detail,
+                                                    ttl)) {
+            if (!hadExisting) acquiredNow.push_back(req.resourceKey);
+            continue;
+        }
+        if (blockerOut) {
+            auto blocker = reservations.findBlockingDirectionalGroup(req.resourceKey,
+                                                                     ownerAgvId,
+                                                                     req.direction,
+                                                                     req.sameDirectionCapacity);
+            if (blocker.has_value()) *blockerOut = *blocker;
+        }
+        for (const auto& key : acquiredNow) {
+            reservations.releaseDirectionalGroup(key, ownerAgvId);
+        }
+        return false;
+    }
+    return true;
+}
+
+static void sync_group_requirements(NodeReservationTable& reservations,
+                                    const std::string& ownerAgvId,
+                                    const std::vector<GroupReservationRequirement>& reqs,
+                                    std::chrono::milliseconds ttl) {
+    std::vector<std::string> keepKeys;
+    keepKeys.reserve(reqs.size());
+    for (const auto& req : reqs) {
+        reservations.tryReserveDirectionalGroup(req.resourceKey,
+                                                ownerAgvId,
+                                                req.direction,
+                                                req.sameDirectionCapacity,
+                                                req.detail,
+                                                ttl);
+        keepKeys.push_back(req.resourceKey);
+    }
+    reservations.releaseAllDirectionalGroupsByOwnerExceptSet(ownerAgvId, keepKeys);
 }
 
 static RegionCongestionInfo build_region_congestion_info(
@@ -5727,23 +5993,13 @@ static std::vector<int> filter_hard_blocked_nodes_for_start(
     const MapInfo& mapInfo,
     const NodeReservationTable& reservations,
     int startNodeId) {
+    (void)region;
+    (void)mapInfo;
+    (void)reservations;
     std::vector<int> out;
     if (hardBlocked.empty()) return out;
-    if (!region.valid()) {
-        out.insert(out.end(), hardBlocked.begin(), hardBlocked.end());
-        return out;
-    }
-    int startCell = region.cellIndexForNode(mapInfo, startNodeId);
     for (int nodeId : hardBlocked) {
-        // Never "unblock" a node that is actively held by another AGV, even if it is in the same
-        // congestion cell as the start. Otherwise the planner will repeatedly pick occupied
-        // neighbors (WAITING_POINT) and the reservation step will immediately truncate to 1 point.
-        if (reservations.findBlockingHold(nodeId).has_value()) {
-            out.push_back(nodeId);
-            continue;
-        }
-        int cell = region.cellIndexForNode(mapInfo, nodeId);
-        if (startCell >= 0 && cell == startCell) continue;
+        if (nodeId == startNodeId) continue;
         out.push_back(nodeId);
     }
     return out;
@@ -6091,7 +6347,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
     ReplanStage stage,
     bool* updatedOut,
     bool* usedTempGoalOut,
-    const std::vector<std::vector<int>>* corridorGroups) {
+    const std::vector<CorridorGroupInfo>* corridorGroups) {
     PathPlanningHelper::AmrPlanInfo out;
     out.amrId = deviceId;
     out.startNodeId = startNodeId;
@@ -6245,7 +6501,6 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
         if (shouldSkipByGate) {
             reservations.releaseAllByOwner(deviceId);
             rt.reservedNodes.clear();
-            rt.blockedSince = std::chrono::steady_clock::time_point{};
             rt.tempGoalNodeId = -1;
             rt.tempGoalBans.clear();
             rt.tempGoalTabu.clear();
@@ -6301,6 +6556,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
         keepNodes.push_back(startNodeId);
         if (!deviceId.empty()) {
             reservations.releaseAllByOwnerExceptSet(deviceId, keepNodes);
+            reservations.releaseAllDirectionalGroupsByOwnerExceptSet(deviceId, {});
             reservations.tryReserve(startNodeId,
                                      deviceId,
                                      NodeReservationTable::HoldReason::WAITING_POINT,
@@ -6329,7 +6585,6 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
         progressed = true;
     }
     if (progressed) {
-        rt.blockedSince = std::chrono::steady_clock::time_point{};
         rt.tempGoalNodeId = -1;
         rt.lastFirstHopFromNodeId = -1;
         rt.lastFirstHopNodeId = -1;
@@ -6617,6 +6872,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
             std::vector<int> keepNodes;
             keepNodes.push_back(startNodeId);
             reservations.releaseAllByOwnerExceptSet(deviceId, keepNodes);
+            reservations.releaseAllDirectionalGroupsByOwnerExceptSet(deviceId, {});
             rt.reservedNodes = keepNodes;
             committedPrefix = keepNodes;
             repo.updateLastSentRoute(deviceId, keepNodes);
@@ -6751,6 +7007,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
             }
             if (!keepNodes.empty()) {
                 reservations.releaseAllByOwnerExceptSet(deviceId, keepNodes);
+                reservations.releaseAllDirectionalGroupsByOwnerExceptSet(deviceId, {});
                 reservations.tryReserve(startNodeId,
                                          deviceId,
                                          NodeReservationTable::HoldReason::WAITING_POINT,
@@ -6782,9 +7039,10 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
         rt.lastMajorAttempt = std::chrono::steady_clock::time_point{};
     }
     const bool enableCongestionAvoid = (getenv_int("CONGESTION_AVOID", 1) != 0);
-    // Fast replans should not consider other AGVs' reservations during planning (soft congestion included).
-    std::vector<int> emptyBlocked;
-    const std::vector<int>& congestionBlocked = avoidHeldNodesInPlanning ? blockedVec : emptyBlocked;
+    // Congestion scoring should always observe current holds so hardBlocked remains a true hard
+    // constraint, while FAST still keeps plain RESERVED_PATH nodes as soft penalties unless they
+    // cross the hard-block threshold.
+    const std::vector<int>& congestionBlocked = blockedVec;
     CongestionInfo congestion;
     {
         const auto t0 = std::chrono::steady_clock::now();
@@ -6799,24 +7057,158 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
         merge_region_congestion(region, congestion);
         mark_ms(profile.regionMs, t0);
     }
-    // Per-corridor direction lock: for each corridor group, if any node is reserved
-    // by another AGV, ban ALL nodes in that group. This prevents opposing-direction
-    // entry into narrow corridors and bridge regions.
+    // Corridor / bridge lock:
+    // - generic narrow corridors remain mutex-style
+    // - straight bridge groups allow limited same-direction flow
+    // - opposite-side bridge entry is blocked via approach nodes
     if (enableCongestionAvoid && corridorGroups && !corridorGroups->empty()) {
-        for (const auto& group : *corridorGroups) {
-            bool occupied = false;
-            for (int gNodeId : group) {
-                auto hold = reservations.findBlockingHold(gNodeId, deviceId);
-                if (hold.has_value()) {
-                    occupied = true;
-                    break;
+        bool preferBridgeWait = false;
+        const CorridorGroupInfo* bridgeWaitGroup = nullptr;
+        auto self_goal_node = [&]() -> int {
+            if (primaryGoal >= 0) return primaryGoal;
+            if (rt.tempGoalNodeId >= 0) return rt.tempGoalNodeId;
+            if (!rt.targets.empty()) return rt.targets.front().nodeId;
+            return -1;
+        };
+        auto self_group_direction = [&](const CorridorGroupInfo& group) -> int {
+            std::vector<int> route;
+            if (rt.reservedNodes.size() > 1) route = rt.reservedNodes;
+            else if (committedPrefix.size() > 1) route = committedPrefix;
+            else {
+                if (startNodeId >= 0) route.push_back(startNodeId);
+                const int goalNode = self_goal_node();
+                if (goalNode >= 0 && (route.empty() || route.back() != goalNode)) {
+                    route.push_back(goalNode);
                 }
             }
-            if (occupied) {
-                for (int gNodeId : group) {
+            return infer_corridor_group_direction_from_route(
+                mapInfo,
+                group,
+                route,
+                startNodeId,
+                self_goal_node());
+        };
+        for (const auto& group : *corridorGroups) {
+            std::unordered_map<std::string, int> holderDirByAgv;
+            auto groupHolds = reservations.snapshotDirectionalGroupHolds(group.resourceKey, deviceId);
+            for (const auto& hold : groupHolds) {
+                if (hold.ownerAgvId.empty()) continue;
+                holderDirByAgv.emplace(hold.ownerAgvId, hold.direction);
+            }
+            if (holderDirByAgv.empty()) {
+                for (int gNodeId : group.nodeIds) {
+                    auto hold = reservations.get(gNodeId);
+                    if (!hold.has_value() || hold->ownerAgvId.empty() || hold->ownerAgvId == deviceId) continue;
+                    if (holderDirByAgv.count(hold->ownerAgvId) > 0) continue;
+                    auto holderRt = repo.snapshotRuntimeState(hold->ownerAgvId);
+                    int holderGoalNode = !holderRt.targets.empty() ? holderRt.targets.front().nodeId : -1;
+                    int holderDir = 0;
+                    if (holderRt.reservedNodes.size() > 1) {
+                        holderDir = infer_corridor_group_direction_from_route(
+                            mapInfo,
+                            group,
+                            holderRt.reservedNodes,
+                            holderRt.lastStatusNodeId,
+                            holderGoalNode);
+                    }
+                    if (holderDir == 0) {
+                        auto holderCommitted = repo.getLastSentRoute(hold->ownerAgvId);
+                        holderDir = infer_corridor_group_direction_from_route(
+                            mapInfo,
+                            group,
+                            holderCommitted,
+                            holderRt.lastStatusNodeId,
+                            holderGoalNode);
+                    }
+                    holderDirByAgv.emplace(hold->ownerAgvId, holderDir);
+                }
+            }
+            if (holderDirByAgv.empty()) continue;
+
+            const int selfDir = self_group_direction(group);
+            int posCount = 0;
+            int negCount = 0;
+            int unknownCount = 0;
+            for (const auto& item : holderDirByAgv) {
+                if (item.second > 0) posCount += 1;
+                else if (item.second < 0) negCount += 1;
+                else unknownCount += 1;
+            }
+
+            bool blockWholeGroup = false;
+            std::vector<int> extraBlocked;
+            auto append_block = [&](const std::vector<int>& nodes) {
+                for (int nodeId : nodes) {
+                    if (nodeId >= 0) extraBlocked.push_back(nodeId);
+                }
+            };
+
+            if (!group.isBridge || !group.isStraight || group.sameDirectionCapacity <= 1) {
+                blockWholeGroup = true;
+            } else if ((posCount > 0 && negCount > 0) || unknownCount > 0 || selfDir == 0) {
+                blockWholeGroup = true;
+            } else if (selfDir > 0) {
+                if (negCount > 0 || posCount >= group.sameDirectionCapacity) {
+                    blockWholeGroup = true;
+                    if (corridor_group_contains_entry(group, startNodeId)) {
+                        preferBridgeWait = true;
+                        bridgeWaitGroup = &group;
+                    }
+                } else {
+                    append_block(group.highSideEntryNodes);
+                }
+            } else {
+                if (posCount > 0 || negCount >= group.sameDirectionCapacity) {
+                    blockWholeGroup = true;
+                    if (corridor_group_contains_entry(group, startNodeId)) {
+                        preferBridgeWait = true;
+                        bridgeWaitGroup = &group;
+                    }
+                } else {
+                    append_block(group.lowSideEntryNodes);
+                }
+            }
+
+            if (blockWholeGroup) {
+                for (int gNodeId : group.nodeIds) {
                     congestion.hardBlocked.insert(gNodeId);
                 }
+                append_block(group.lowSideEntryNodes);
+                append_block(group.highSideEntryNodes);
             }
+            for (int nodeId : extraBlocked) {
+                congestion.hardBlocked.insert(nodeId);
+            }
+        }
+        if (preferBridgeWait && startNodeId >= 0 && !deviceId.empty()) {
+            std::vector<int> keepNodes{startNodeId};
+            reservations.releaseAllByOwnerExceptSet(deviceId, keepNodes);
+            reservations.releaseAllDirectionalGroupsByOwnerExceptSet(deviceId, {});
+            reservations.tryReserve(
+                startNodeId,
+                deviceId,
+                NodeReservationTable::HoldReason::WAITING_POINT,
+                "bridge_wait",
+                std::chrono::milliseconds(0));
+            rt.reservedNodes = keepNodes;
+            committedPrefix = keepNodes;
+            repo.updateLastSentRoute(deviceId, keepNodes);
+            repo.updateReservedNodesAndMismatchOnly(
+                deviceId,
+                keepNodes,
+                std::chrono::steady_clock::time_point{},
+                -1);
+            if (logSummary) {
+                std::cout << log_time_prefix()
+                          << "[Bridge] wait-at-entry deviceId=" << deviceId
+                          << " start=" << startNodeId
+                          << " goal=" << primaryGoal
+                          << " groupSize=" << (bridgeWaitGroup ? bridgeWaitGroup->nodeIds.size() : 0)
+                          << std::endl;
+            }
+            if (updatedOut) *updatedOut = false;
+            repo.updateRuntimeState(deviceId, planEntry.pathId, rt);
+            return build_plan_from_reserved(rt.reservedNodes);
         }
     }
     // Deadlock avoid nodes: after a deadlock yield, ban the contested node(s) so the
@@ -6923,6 +7315,9 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
 	        if (!localBanned.empty()) {
 	            localBanned.erase(fromNodeId);
             bool goalBlockedByRegion = false;
+            const bool goalBlockedByHard =
+                std::find(hardBlockedFiltered.begin(), hardBlockedFiltered.end(), goalNodeId)
+                != hardBlockedFiltered.end();
 	            if (enableCongestionAvoid && region.valid() && !region.hardBlockedNodes.empty()) {
                 int startCell = region.cellIndexForNode(mapInfo, fromNodeId);
                 int goalCell = region.cellIndexForNode(mapInfo, goalNodeId);
@@ -6931,7 +7326,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
                     goalBlockedByRegion = true;
                 }
             }
-            if (!goalBlockedByRegion && !goalHeldByOther && !goalTempBlocked) {
+            if (!goalBlockedByRegion && !goalBlockedByHard && !goalHeldByOther && !goalTempBlocked) {
                 localBanned.erase(goalNodeId);
             }
         }
@@ -6954,18 +7349,30 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
             !softTimeWindows.empty() &&
             !avoidHeldNodesInPlanning &&
             !overrideBanned;
-        if (useSoftTimePenalty) {
+        const bool useFastHeldPenalty = !fastHeldPenaltyScore.empty();
+        if (useSoftTimePenalty || useFastHeldPenalty) {
             dynamicPenaltyFn =
                 [&](int prevNodeId, int nodeId, double arrivalCostMm) -> double {
-                    return compute_soft_time_window_penalty_mm(
-                        softTimeWindows,
-                        mapInfo,
-                        prevNodeId,
-                        nodeId,
-                        goalNodeId,
-                        arrivalCostMm / nominalSpeed,
-                        goalServiceSec,
-                        nominalSpeed);
+                    double penalty = 0.0;
+                    if (useSoftTimePenalty) {
+                        penalty += compute_soft_time_window_penalty_mm(
+                            softTimeWindows,
+                            mapInfo,
+                            prevNodeId,
+                            nodeId,
+                            goalNodeId,
+                            arrivalCostMm / nominalSpeed,
+                            goalServiceSec,
+                            nominalSpeed);
+                    }
+                    if (useFastHeldPenalty) {
+                        auto itPenalty = fastHeldPenaltyScore.find(nodeId);
+                        if (itPenalty != fastHeldPenaltyScore.end()) {
+                            double score = std::clamp(itPenalty->second, 0.0, 1.0);
+                            penalty += fastHeldPenaltyMm * score;
+                        }
+                    }
+                    return penalty;
                 };
         }
 
@@ -6990,6 +7397,9 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
 	            }
 	            ctx.blockedNodes.erase(fromNodeId);
             bool goalBlockedByRegion = false;
+            const bool goalBlockedByHard =
+                std::find(hardBlockedFiltered.begin(), hardBlockedFiltered.end(), goalNodeId)
+                != hardBlockedFiltered.end();
             if (enableCongestionAvoid && region.valid() && !region.hardBlockedNodes.empty()) {
                 int startCell = region.cellIndexForNode(mapInfo, fromNodeId);
                 int goalCell = region.cellIndexForNode(mapInfo, goalNodeId);
@@ -6998,7 +7408,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
                     goalBlockedByRegion = true;
                 }
 	            }
-            if (!goalBlockedByRegion && !goalHeldByOther && !goalTempBlocked) {
+            if (!goalBlockedByRegion && !goalBlockedByHard && !goalHeldByOther && !goalTempBlocked) {
                 ctx.blockedNodes.erase(goalNodeId);
             }
             const auto t0 = std::chrono::steady_clock::now();
@@ -7013,10 +7423,6 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
             const std::unordered_map<int, double>* scorePtr =
                 (enableCongestionAvoid && !congestion.nodeScore.empty()) ? &congestion.nodeScore : nullptr;
             double penaltyMm = aStarPenaltyMm;
-            if (!fastHeldPenaltyScore.empty()) {
-                scorePtr = &fastHeldPenaltyScore;
-                penaltyMm = fastHeldPenaltyMm;
-            }
             const auto t0 = std::chrono::steady_clock::now();
             auto res = aStar.findPath(fromNodeId,
                                       goalNodeId,
@@ -7065,6 +7471,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
         if (!deviceId.empty()) {
             if (!keepNodes.empty()) {
                 reservations.releaseAllByOwnerExceptSet(deviceId, keepNodes);
+                reservations.releaseAllDirectionalGroupsByOwnerExceptSet(deviceId, {});
             } else {
                 reservations.releaseAllByOwner(deviceId);
             }
@@ -7111,11 +7518,11 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
     if (corridorGroups && !corridorGroups->empty()) {
         for (const auto& group : *corridorGroups) {
             bool selfInGroup = false;
-            for (int nid : group) {
+            for (int nid : group.nodeIds) {
                 if (nid == startNodeId) { selfInGroup = true; break; }
             }
             if (selfInGroup) {
-                for (int nid : group) {
+                for (int nid : group.nodeIds) {
                     corridorBanNodes.insert(nid);
                 }
             }
@@ -7212,8 +7619,8 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
         const bool goalHot = congestion.hotNodes.count(primaryGoal) > 0;
         const bool goalRegion = region.valid() && region.hardBlockedNodes.count(primaryGoal) > 0;
         long long blockedMs = 0;
-        if (rt.blockedSince != std::chrono::steady_clock::time_point{}) {
-            blockedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - rt.blockedSince).count();
+        if (rt.staticSince != std::chrono::steady_clock::time_point{}) {
+            blockedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - rt.staticSince).count();
         }
                 if (should_log_replan_unreachable()) {
                     std::cout << log_time_prefix()
@@ -7335,13 +7742,6 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
     if (!reachablePrimary) {
         bool allowTemp = (primaryGoal >= 0) || onOtherTaskNode;
         if (allowTemp) {
-            if (statusStaticNow) {
-                if (rt.blockedSince == std::chrono::steady_clock::time_point{}) {
-                    rt.blockedSince = now;
-                }
-            } else {
-                rt.blockedSince = std::chrono::steady_clock::time_point{};
-            }
             bool canTryTemp = (rt.tempGoalNodeId >= 0);
             if (!canTryTemp) {
                 if (!statusStaticNow) {
@@ -7359,11 +7759,9 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
                 }
             }
         } else {
-            rt.blockedSince = std::chrono::steady_clock::time_point{};
             rt.tempGoalNodeId = -1;
         }
 	    } else {
-	        rt.blockedSince = std::chrono::steady_clock::time_point{};
 	        rt.tempGoalNodeId = -1;
 	    }
 
@@ -7385,7 +7783,6 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
         } else {
             rt.majorFailCount = 0;
             rt.tempGoalNodeId = -1;
-            rt.blockedSince = std::chrono::steady_clock::time_point{};
             rt.stuckSince = std::chrono::steady_clock::time_point{};
             rt.stuckNodeId = -1;
         }
@@ -7489,6 +7886,8 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
         std::string blockedBy;
         std::string blockedReason;
         std::string blockedDetail;
+        std::string blockedGroup;
+        int blockedDirection = 0;
     };
 
     auto reserve_route = [&](const std::vector<int>& route,
@@ -7497,6 +7896,51 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
         if (dbg) *dbg = ReserveDebugInfo{};
         std::vector<int> out;
         out.reserve(std::min<size_t>(route.size(), static_cast<size_t>(reserveBudget)));
+        std::vector<int> routePrefix;
+        routePrefix.reserve(std::min<size_t>(route.size(), static_cast<size_t>(reserveBudget)));
+        for (size_t i = 0; i < route.size() && static_cast<int>(routePrefix.size()) < reserveBudget; ++i) {
+            int nodeId = route[i];
+            if (nodeId < 0) continue;
+            routePrefix.push_back(nodeId);
+        }
+        auto groupReqs = (corridorGroups && !corridorGroups->empty())
+            ? collect_group_reservation_requirements(mapInfo,
+                                                     *corridorGroups,
+                                                     routePrefix,
+                                                     startNodeId,
+                                                     selectedGoal,
+                                                     reservations,
+                                                     deviceId)
+            : std::vector<GroupReservationRequirement>{};
+        NodeReservationTable::DirectionalGroupHoldEntry groupBlocker;
+        if (!groupReqs.empty() &&
+            !reserve_group_requirements(reservations,
+                                        deviceId,
+                                        groupReqs,
+                                        std::chrono::milliseconds(std::max(0, holdTtlMs)),
+                                        &groupBlocker)) {
+            if (dbg) {
+                dbg->blockedBy = groupBlocker.ownerAgvId;
+                dbg->blockedReason = "directional_group";
+                dbg->blockedDetail = groupBlocker.detail;
+                dbg->blockedGroup = groupBlocker.groupKey;
+                dbg->blockedDirection = groupBlocker.direction;
+            }
+            if (logSummary) {
+                std::cout << log_time_prefix()
+                          << "[Reserve] group blocked deviceId=" << deviceId
+                          << " group=" << groupBlocker.groupKey
+                          << " holder=" << (groupBlocker.ownerAgvId.empty() ? "<none>" : groupBlocker.ownerAgvId)
+                          << " dir=" << groupBlocker.direction
+                          << " detail=" << (groupBlocker.detail.empty() ? "<none>" : groupBlocker.detail)
+                          << std::endl;
+            }
+            reservations.releaseAllDirectionalGroupsByOwnerExceptSet(deviceId, {});
+            reservations.tryReserve(startNodeId, deviceId, NodeReservationTable::HoldReason::WAITING_POINT,
+                                    "current", std::chrono::milliseconds(0));
+            out.push_back(startNodeId);
+            return out;
+        }
         for (size_t i = 0; i < route.size() && (int)out.size() < reserveBudget; ++i) {
             int nodeId = route[i];
             if (nodeId < 0) continue;
@@ -7544,6 +7988,23 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
                                     "current", std::chrono::milliseconds(0));
             out.push_back(startNodeId);
         }
+        auto actualGroupReqs = (corridorGroups && !corridorGroups->empty())
+            ? collect_group_reservation_requirements(mapInfo,
+                                                     *corridorGroups,
+                                                     out,
+                                                     startNodeId,
+                                                     selectedGoal,
+                                                     reservations,
+                                                     deviceId)
+            : std::vector<GroupReservationRequirement>{};
+        if (!actualGroupReqs.empty()) {
+            sync_group_requirements(reservations,
+                                    deviceId,
+                                    actualGroupReqs,
+                                    std::chrono::milliseconds(std::max(0, holdTtlMs)));
+        } else {
+            reservations.releaseAllDirectionalGroupsByOwnerExceptSet(deviceId, {});
+        }
         return out;
     };
     auto reserve_with_profile = [&](const std::vector<int>& route,
@@ -7572,6 +8033,8 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
                   << " blockedBy=" << (dbg.blockedBy.empty() ? "<none>" : dbg.blockedBy)
                   << " blockedReason=" << (dbg.blockedReason.empty() ? "<none>" : dbg.blockedReason)
                   << " blockedDetail=" << (dbg.blockedDetail.empty() ? "<none>" : dbg.blockedDetail)
+                  << " blockedGroup=" << (dbg.blockedGroup.empty() ? "<none>" : dbg.blockedGroup)
+                  << " blockedDir=" << dbg.blockedDirection
                   << std::endl;
     };
 
@@ -7600,26 +8063,6 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
     ReserveDebugInfo reserveDbg;
     std::vector<int> newReserved = reserve_with_profile(plannedRoute, usingTempGoal, &reserveDbg);
     log_reserve_result("initial", newReserved, reserveDbg);
-    if (newReserved.size() <= 1 && plannedRoute.size() >= 2 &&
-        committedPrefix.size() <= 1 && !avoidHeldNodesInPlanning &&
-        !bannedNodesAll.empty() && selectedGoal >= 0) {
-        std::vector<int> detour;
-        bool detourStatic = false;
-        if (plan_from_to(startNodeId, selectedGoal, detour, detourStatic, &bannedNodesAll)) {
-            if (logSummary) {
-                std::cout << log_time_prefix()
-                          << "[Replan] reserved prefix blocked deviceId=" << deviceId
-                          << " start=" << startNodeId
-                          << " goal=" << selectedGoal
-                          << " retry=avoid_held"
-                          << std::endl;
-            }
-            plannedRoute = std::move(detour);
-            usedStatic = detourStatic;
-            newReserved = reserve_with_profile(plannedRoute, usingTempGoal, &reserveDbg);
-            log_reserve_result("retry_avoid_held", newReserved, reserveDbg);
-        }
-    }
     if (newReserved.size() <= 1 && rt.reservedNodes.size() > 1) {
         std::vector<int> keepRoute = rt.reservedNodes;
         if (keepRoute.front() != startNodeId) {
@@ -7834,7 +8277,7 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_with_throttle(
     int reserveBudgetOverride,
     int minIntervalMs,
     bool* usedCacheOut,
-    const std::vector<std::vector<int>>* corridorGroups = nullptr) {
+    const std::vector<CorridorGroupInfo>* corridorGroups = nullptr) {
     if (usedCacheOut) *usedCacheOut = false;
     int baseIntervalMs = (minIntervalMs > 0) ? minIntervalMs : 200;
     int effectiveIntervalMs = baseIntervalMs;
@@ -8767,7 +9210,8 @@ static void handle_status_infos(const json& j,
                                 RobotDataRepository& repo,
                                 bool mapReadyNow,
                                 const MapInfo& mapInfo,
-                                NodeReservationTable& reservations) {
+                                NodeReservationTable& reservations,
+                                const std::vector<CorridorGroupInfo>* corridorGroups) {
     const json* statusArray = nullptr;
     if (j.is_array()) {
         statusArray = &j;
@@ -8826,6 +9270,30 @@ static void handle_status_infos(const json& j,
         if (mapReadyNow) {
             if (curNodeId >= 0) {
                 bool skipRefreshHolds = false;
+                auto sync_status_group_holds = [&](const std::vector<int>& routeNodes) {
+                    if (!corridorGroups || corridorGroups->empty()) {
+                        reservations.releaseAllDirectionalGroupsByOwnerExceptSet(entry.deviceId, {});
+                        return;
+                    }
+                    int goalNodeId = -1;
+                    auto targetOpt = repo.peekTarget(entry.deviceId);
+                    if (targetOpt.has_value()) goalNodeId = targetOpt->nodeId;
+                    auto reqs = collect_group_reservation_requirements(mapInfo,
+                                                                      *corridorGroups,
+                                                                      routeNodes,
+                                                                      curNodeId,
+                                                                      goalNodeId,
+                                                                      reservations,
+                                                                      entry.deviceId);
+                    if (!reqs.empty()) {
+                        sync_group_requirements(reservations,
+                                                entry.deviceId,
+                                                reqs,
+                                                std::chrono::milliseconds(std::max(0, ttlMs)));
+                    } else {
+                        reservations.releaseAllDirectionalGroupsByOwnerExceptSet(entry.deviceId, {});
+                    }
+                };
                 // Update target progress for this AGV.
                 repo.advanceTargets(entry.deviceId, curNodeId);
 
@@ -8838,7 +9306,6 @@ static void handle_status_infos(const json& j,
                 if (enableTaskStatusGate && rt.waitTaskStatusClear) {
                     reservations.releaseAllByOwner(entry.deviceId);
                     rt.reservedNodes.clear();
-                    rt.blockedSince = std::chrono::steady_clock::time_point{};
                     rt.tempGoalNodeId = -1;
                     rt.tempGoalBans.clear();
                     rt.tempGoalTabu.clear();
@@ -8885,6 +9352,7 @@ static void handle_status_infos(const json& j,
                                                                 rt.statusMismatchSince,
                                                                 rt.statusMismatchNodeId);
                         repo.updateLastSentRoute(entry.deviceId, keepNodes);
+                        sync_status_group_holds(keepNodes);
                         if (logSummary) {
                             std::cout << log_time_prefix()
                                       << "[Reserve] idle release deviceId=" << entry.deviceId
@@ -9071,6 +9539,10 @@ static void handle_status_infos(const json& j,
                                          "status_next");
                         }
                     }
+                    std::vector<int> groupRoute = reservedNow;
+                    if (groupRoute.empty()) groupRoute = committed;
+                    if (groupRoute.empty()) groupRoute.push_back(curNodeId);
+                    sync_status_group_holds(groupRoute);
                 }
             }
         }
@@ -9162,7 +9634,8 @@ static void handle_status_infos_multimap(const json& j,
                             ctx->robotRepo,
                             ctx->mapReady.load(),
                             mapInfo,
-                            ctx->nodeReservations);
+                            ctx->nodeReservations,
+                            ctx->corridorGroups.empty() ? nullptr : &ctx->corridorGroups);
     }
 }
 
@@ -11426,7 +11899,6 @@ int main() {
                     ctx->nodeReservations.releaseAllByOwner(deviceId);
                     ctx->robotRepo.updateLastSentRoute(deviceId, {});
                     rt.reservedNodes.clear();
-                    rt.blockedSince = std::chrono::steady_clock::time_point{};
                     rt.tempGoalNodeId = -1;
                     rt.lastFirstHopFromNodeId = -1;
                     rt.lastFirstHopNodeId = -1;

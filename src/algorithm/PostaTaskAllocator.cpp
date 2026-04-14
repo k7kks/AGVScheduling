@@ -443,6 +443,115 @@ static bool isSequenceValidNoDetourCut(
     return true;
 }
 
+static std::pair<std::vector<int>, double> rebalanceHeavyChains(
+    const std::vector<int>& best,
+    double fBest,
+    int amrNum,
+    int taskNum,
+    const std::vector<Amr>& amrList,
+    const std::vector<Task>& taskList,
+    const std::vector<double>& enduranceSec,
+    const std::vector<int>& taskTypes,
+    const std::vector<int>& taskPriorities,
+    double priPenaltyCoeff,
+    const std::vector<double>& priPenaltyCurve,
+    const std::vector<double>& taskArriveSec,
+    double baseNowSec,
+    double waitPenaltyCoeff,
+    const std::chrono::steady_clock::time_point& tStart,
+    double timeLimitSec
+) {
+    auto bestCode = best;
+    double bestScore = fBest;
+    const int srcLimit = std::min(amrNum, 4);
+    const int dstLimit = std::min(amrNum, 8);
+    const int maxPasses = std::min(6, std::max(1, amrNum));
+
+    auto timed_out = [&]() {
+        double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - tStart).count();
+        return elapsed > timeLimitSec;
+    };
+
+    for (int pass = 0; pass < maxPasses; ++pass) {
+        if (timed_out()) break;
+        auto amrTasks = TaskAllocationUtils::parseSolution(bestCode);
+        if ((int)amrTasks.size() < amrNum) amrTasks.resize(amrNum);
+        auto amrDurations = TaskAllocationUtils::computeAmrDurations(amrNum, taskNum, bestCode);
+
+        std::vector<int> srcOrder(amrNum);
+        std::iota(srcOrder.begin(), srcOrder.end(), 0);
+        std::sort(srcOrder.begin(), srcOrder.end(), [&](int lhs, int rhs) {
+            if (amrDurations[lhs] != amrDurations[rhs]) return amrDurations[lhs] > amrDurations[rhs];
+            return amrTasks[lhs].size() > amrTasks[rhs].size();
+        });
+
+        std::vector<int> dstOrder(amrNum);
+        std::iota(dstOrder.begin(), dstOrder.end(), 0);
+        std::sort(dstOrder.begin(), dstOrder.end(), [&](int lhs, int rhs) {
+            const bool lhsIdle = amrTasks[lhs].empty();
+            const bool rhsIdle = amrTasks[rhs].empty();
+            if (lhsIdle != rhsIdle) return lhsIdle > rhsIdle;
+            if (amrDurations[lhs] != amrDurations[rhs]) return amrDurations[lhs] < amrDurations[rhs];
+            return amrTasks[lhs].size() < amrTasks[rhs].size();
+        });
+
+        bool improved = false;
+        std::vector<int> passBestCode = bestCode;
+        double passBestScore = bestScore;
+
+        for (int si = 0; si < srcLimit; ++si) {
+            int src = srcOrder[si];
+            if (src < 0 || src >= amrNum) continue;
+            const auto& srcSeq = amrTasks[src];
+            if (srcSeq.size() <= 1) continue;
+
+            std::vector<int> candidatePositions;
+            candidatePositions.push_back(static_cast<int>(srcSeq.size()) - 1);
+            candidatePositions.push_back(static_cast<int>(srcSeq.size()) / 2);
+            candidatePositions.push_back(0);
+            std::sort(candidatePositions.begin(), candidatePositions.end());
+            candidatePositions.erase(std::unique(candidatePositions.begin(), candidatePositions.end()), candidatePositions.end());
+
+            for (int pos : candidatePositions) {
+                if (timed_out()) break;
+                if (pos < 0 || pos >= static_cast<int>(srcSeq.size())) continue;
+
+                for (int di = 0; di < dstLimit; ++di) {
+                    int dst = dstOrder[di];
+                    if (dst < 0 || dst >= amrNum || dst == src) continue;
+                    const auto& dstSeq = amrTasks[dst];
+                    for (size_t insertPos = 0; insertPos <= dstSeq.size(); ++insertPos) {
+                        auto tryTasks = amrTasks;
+                        int movedTask = tryTasks[src][pos];
+                        tryTasks[src].erase(tryTasks[src].begin() + pos);
+                        tryTasks[dst].insert(tryTasks[dst].begin() + static_cast<long>(insertPos), movedTask);
+
+                        if (!isSequenceValidNoDetourCut(tryTasks, src, taskNum, amrList, taskList)) continue;
+                        if (!isSequenceValidNoDetourCut(tryTasks, dst, taskNum, amrList, taskList)) continue;
+
+                        auto codeTry = TaskAllocationUtils::deParseSolution(tryTasks);
+                        double fTry = evaluateCost(amrNum, taskNum, codeTry, enduranceSec, taskTypes,
+                                                   taskPriorities, priPenaltyCoeff, priPenaltyCurve,
+                                                   taskArriveSec, baseNowSec, waitPenaltyCoeff);
+                        if (fTry + 1e-9 < passBestScore) {
+                            passBestScore = fTry;
+                            passBestCode = std::move(codeTry);
+                            improved = true;
+                        }
+                    }
+                }
+            }
+            if (timed_out()) break;
+        }
+
+        if (!improved) break;
+        bestCode = std::move(passBestCode);
+        bestScore = passBestScore;
+    }
+
+    return {bestCode, bestScore};
+}
+
 } // namespace
 
 // -------------------------- PostaTaskAllocator 实现 --------------------------
@@ -618,6 +727,13 @@ AllocationResult PostaTaskAllocator::allocate(
         }
 
         // no extra balancing; keep core POSTA operators only
+        auto balanced = rebalanceHeavyChains(best, fBest, amrNum, taskNum, amrList, taskList,
+                                             enduranceSec, taskTypes, taskPriorities,
+                                             priCoeffLocal, priorityPenaltyCurve_,
+                                             taskArriveSec, baseNowSec, waitCoeffLocal,
+                                             tStart, timeLimitSec_);
+        best = std::move(balanced.first);
+        fBest = balanced.second;
 
         if (fBest < last) noImprove = 0; else if (++noImprove >= maxNoImprove) break;
         last = fBest;
