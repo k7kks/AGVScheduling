@@ -5186,6 +5186,75 @@ static bool corridor_group_contains_or_entry(const CorridorGroupInfo& group, int
     return corridor_group_contains_node(group, nodeId) || corridor_group_contains_entry(group, nodeId);
 }
 
+static bool route_touches_group_body(const CorridorGroupInfo& group,
+                                     const std::vector<int>& route,
+                                     int currentNodeId = -1) {
+    if (corridor_group_contains_node(group, currentNodeId)) return true;
+    for (int nodeId : route) {
+        if (corridor_group_contains_node(group, nodeId)) return true;
+    }
+    return false;
+}
+
+static bool owner_holds_group_body_nodes(const CorridorGroupInfo& group,
+                                         const NodeReservationTable& reservations,
+                                         const std::string& ownerAgvId) {
+    if (ownerAgvId.empty()) return false;
+    for (int nodeId : group.nodeIds) {
+        auto hold = reservations.get(nodeId);
+        if (hold.has_value() && hold->ownerAgvId == ownerAgvId) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static std::vector<int> trim_route_to_current_node(const std::vector<int>& route, int currentNodeId) {
+    std::vector<int> out = route;
+    if (currentNodeId < 0) return out;
+    if (out.empty()) {
+        out.push_back(currentNodeId);
+        return out;
+    }
+    auto it = std::find(out.begin(), out.end(), currentNodeId);
+    if (it != out.end()) {
+        if (it != out.begin()) out.erase(out.begin(), it);
+    } else {
+        out.insert(out.begin(), currentNodeId);
+    }
+    return out;
+}
+
+static std::vector<int> build_group_release_prefix(const CorridorGroupInfo& group,
+                                                   const std::vector<int>& route,
+                                                   int currentNodeId) {
+    std::vector<int> aligned = trim_route_to_current_node(route, currentNodeId);
+    if (aligned.empty()) {
+        if (currentNodeId >= 0) aligned.push_back(currentNodeId);
+        return aligned;
+    }
+    if (!corridor_group_contains_or_entry(group, currentNodeId)) {
+        return aligned;
+    }
+
+    std::vector<int> prefix;
+    prefix.reserve(aligned.size());
+    bool seenResource = false;
+    for (int nodeId : aligned) {
+        if (nodeId < 0) continue;
+        const bool inResource = corridor_group_contains_or_entry(group, nodeId);
+        if (inResource) seenResource = true;
+        prefix.push_back(nodeId);
+        if (seenResource && !inResource) {
+            break;
+        }
+    }
+    if (prefix.empty() && currentNodeId >= 0) {
+        prefix.push_back(currentNodeId);
+    }
+    return prefix;
+}
+
 static double corridor_group_axis_value(const MapInfo& mapInfo, int nodeId, bool horizontal) {
     try {
         const Node& node = mapInfo.getNodeById(nodeId);
@@ -7312,15 +7381,13 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
     // - straight bridge groups allow limited same-direction flow
     // - opposite-side bridge entry is blocked via approach nodes
     if (enableCongestionAvoid && corridorGroups && !corridorGroups->empty()) {
-        bool preferBridgeWait = false;
-        const CorridorGroupInfo* bridgeWaitGroup = nullptr;
         auto self_goal_node = [&]() -> int {
             if (primaryGoal >= 0) return primaryGoal;
             if (rt.tempGoalNodeId >= 0) return rt.tempGoalNodeId;
             if (!rt.targets.empty()) return rt.targets.front().nodeId;
             return -1;
         };
-        auto self_group_intent = [&](const CorridorGroupInfo& group) -> GroupTravelIntent {
+        auto self_group_route = [&]() -> std::vector<int> {
             std::vector<int> route;
             if (rt.reservedNodes.size() > 1) route = rt.reservedNodes;
             else if (committedPrefix.size() > 1) route = committedPrefix;
@@ -7331,6 +7398,10 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
                     route.push_back(goalNode);
                 }
             }
+            return route;
+        };
+        auto self_group_intent = [&](const CorridorGroupInfo& group) -> GroupTravelIntent {
+            std::vector<int> route = self_group_route();
             return infer_corridor_group_travel_intent(
                 mapInfo,
                 group,
@@ -7340,19 +7411,6 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
         };
         for (const auto& group : *corridorGroups) {
             if (group.isBridge && group.isStraight && group.sameDirectionCapacity > 1) {
-                const auto selfIntent = self_group_intent(group);
-                const bool selfAtEntry = corridor_group_contains_entry(group, startNodeId);
-                const auto admission = evaluate_bridge_group_admission(
-                    mapInfo,
-                    group,
-                    repo,
-                    reservations,
-                    deviceId,
-                    selfIntent);
-                if (!admission.allowed && selfAtEntry) {
-                    preferBridgeWait = true;
-                    bridgeWaitGroup = &group;
-                }
                 continue;
             }
 
@@ -7417,20 +7475,12 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
             } else if (selfDir > 0) {
                 if (negCount > 0 || posCount >= group.sameDirectionCapacity) {
                     blockWholeGroup = true;
-                    if (corridor_group_contains_entry(group, startNodeId)) {
-                        preferBridgeWait = true;
-                        bridgeWaitGroup = &group;
-                    }
                 } else {
                     append_block(group.highSideEntryNodes);
                 }
             } else {
                 if (posCount > 0 || negCount >= group.sameDirectionCapacity) {
                     blockWholeGroup = true;
-                    if (corridor_group_contains_entry(group, startNodeId)) {
-                        preferBridgeWait = true;
-                        bridgeWaitGroup = &group;
-                    }
                 } else {
                     append_block(group.lowSideEntryNodes);
                 }
@@ -7446,36 +7496,6 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
             for (int nodeId : extraBlocked) {
                 congestion.hardBlocked.insert(nodeId);
             }
-        }
-        if (preferBridgeWait && startNodeId >= 0 && !deviceId.empty()) {
-            std::vector<int> keepNodes{startNodeId};
-            reservations.releaseAllByOwnerExceptSet(deviceId, keepNodes);
-            reservations.releaseAllDirectionalGroupsByOwnerExceptSet(deviceId, {});
-            reservations.tryReserve(
-                startNodeId,
-                deviceId,
-                NodeReservationTable::HoldReason::WAITING_POINT,
-                "bridge_wait",
-                std::chrono::milliseconds(0));
-            rt.reservedNodes = keepNodes;
-            committedPrefix = keepNodes;
-            repo.updateLastSentRoute(deviceId, keepNodes);
-            repo.updateReservedNodesAndMismatchOnly(
-                deviceId,
-                keepNodes,
-                std::chrono::steady_clock::time_point{},
-                -1);
-            if (logSummary) {
-                std::cout << log_time_prefix()
-                          << "[Bridge] wait-at-entry deviceId=" << deviceId
-                          << " start=" << startNodeId
-                          << " goal=" << primaryGoal
-                          << " groupSize=" << (bridgeWaitGroup ? bridgeWaitGroup->nodeIds.size() : 0)
-                          << std::endl;
-            }
-            if (updatedOut) *updatedOut = false;
-            repo.updateRuntimeState(deviceId, planEntry.pathId, rt);
-            return build_plan_from_reserved(rt.reservedNodes);
         }
     }
     // Deadlock avoid nodes: after a deadlock yield, ban the contested node(s) so the
@@ -8124,6 +8144,131 @@ static PathPlanningHelper::AmrPlanInfo compute_dynamic_plan_to_next_target(
 		                    usedStatic = false;
                 }
             }
+        }
+    }
+
+    if (enableCongestionAvoid && corridorGroups && !corridorGroups->empty()) {
+        auto align_route_to_start = [&](const std::vector<int>& route) -> std::vector<int> {
+            return trim_route_to_current_node(route, startNodeId);
+        };
+        auto limit_resource_route_for_yield = [&](std::vector<int>& route, const char* reason) {
+            if (route.empty()) return;
+            for (const auto& group : *corridorGroups) {
+                if (!corridor_group_contains_or_entry(group, startNodeId)) continue;
+                auto trimmed = build_group_release_prefix(group, route, startNodeId);
+                if (trimmed.empty() || trimmed.size() >= route.size()) continue;
+                if (logSummary) {
+                    std::cout << log_time_prefix()
+                              << "[Yield] minimize-resource-hold deviceId=" << deviceId
+                              << " start=" << startNodeId
+                              << " reason=" << reason
+                              << " before=" << format_nodes_head(route)
+                              << " after=" << format_nodes_head(trimmed)
+                              << " groupSize=" << group.nodeIds.size()
+                              << std::endl;
+                }
+                route = std::move(trimmed);
+                return;
+            }
+        };
+
+        const CorridorGroupInfo* preserveBridgeGroup = nullptr;
+        std::vector<int> preserveBridgeRoute;
+        std::vector<int> existingBridgeRoute;
+        if (rt.reservedNodes.size() > 1) {
+            existingBridgeRoute = align_route_to_start(rt.reservedNodes);
+        } else if (committedPrefix.size() > 1) {
+            existingBridgeRoute = align_route_to_start(committedPrefix);
+        }
+        for (const auto& group : *corridorGroups) {
+            if (!group.isBridge || !group.isStraight || group.sameDirectionCapacity <= 1) continue;
+            if (!corridor_group_contains_node(group, startNodeId)) continue;
+            if (!owner_holds_group_body_nodes(group, reservations, deviceId)) continue;
+            if (route_touches_group_body(group, plannedRoute, startNodeId)) continue;
+            preserveBridgeGroup = &group;
+            preserveBridgeRoute = build_group_release_prefix(group, existingBridgeRoute, startNodeId);
+            if (preserveBridgeRoute.empty()) {
+                preserveBridgeRoute = existingBridgeRoute;
+            }
+            break;
+        }
+        if (preserveBridgeGroup) {
+            if (preserveBridgeRoute.empty()) {
+                preserveBridgeRoute.push_back(startNodeId);
+            }
+            plannedRoute = preserveBridgeRoute;
+            usedStatic = false;
+            if (logSummary) {
+                std::cout << log_time_prefix()
+                          << "[Bridge] preserve-owned-route deviceId=" << deviceId
+                          << " start=" << startNodeId
+                          << " route=" << format_nodes_head(plannedRoute)
+                          << " groupSize=" << preserveBridgeGroup->nodeIds.size()
+                          << std::endl;
+            }
+        }
+
+        const bool yieldMode =
+            (rt.deadlockYieldUntil != std::chrono::steady_clock::time_point{} &&
+             now < rt.deadlockYieldUntil) ||
+            usingTempGoal ||
+            (stage == ReplanStage::SUPER && !rt.blockedByAgvId.empty());
+        if (yieldMode) {
+            limit_resource_route_for_yield(plannedRoute, usingTempGoal ? "temp_goal" : "yield");
+        }
+
+        const CorridorGroupInfo* bridgeWaitGroup = nullptr;
+        for (const auto& group : *corridorGroups) {
+            if (!group.isBridge || !group.isStraight || group.sameDirectionCapacity <= 1) continue;
+            if (!corridor_group_contains_entry(group, startNodeId)) continue;
+            if (!route_touches_group_body(group, plannedRoute, startNodeId)) continue;
+            const auto requestedIntent = infer_corridor_group_travel_intent(
+                mapInfo,
+                group,
+                plannedRoute,
+                startNodeId,
+                selectedGoal);
+            const auto admission = evaluate_bridge_group_admission(
+                mapInfo,
+                group,
+                repo,
+                reservations,
+                deviceId,
+                requestedIntent);
+            if (!admission.allowed) {
+                bridgeWaitGroup = &group;
+                break;
+            }
+        }
+        if (bridgeWaitGroup && startNodeId >= 0 && !deviceId.empty()) {
+            std::vector<int> keepNodes{startNodeId};
+            reservations.releaseAllByOwnerExceptSet(deviceId, keepNodes);
+            reservations.releaseAllDirectionalGroupsByOwnerExceptSet(deviceId, {});
+            reservations.tryReserve(
+                startNodeId,
+                deviceId,
+                NodeReservationTable::HoldReason::WAITING_POINT,
+                "bridge_wait",
+                std::chrono::milliseconds(0));
+            rt.reservedNodes = keepNodes;
+            committedPrefix = keepNodes;
+            repo.updateLastSentRoute(deviceId, keepNodes);
+            repo.updateReservedNodesAndMismatchOnly(
+                deviceId,
+                keepNodes,
+                std::chrono::steady_clock::time_point{},
+                -1);
+            if (logSummary) {
+                std::cout << log_time_prefix()
+                          << "[Bridge] wait-at-entry deviceId=" << deviceId
+                          << " start=" << startNodeId
+                          << " goal=" << selectedGoal
+                          << " groupSize=" << bridgeWaitGroup->nodeIds.size()
+                          << std::endl;
+            }
+            if (updatedOut) *updatedOut = false;
+            repo.updateRuntimeState(deviceId, planEntry.pathId, rt);
+            return build_plan_from_reserved(rt.reservedNodes);
         }
     }
 
