@@ -89,10 +89,10 @@ export SIM_STATUS_INTERVAL_MS="${SIM_STATUS_INTERVAL_MS:-300}"
 # Bootstrap map settle wait (s): external_receiver reloads map asynchronously,
 # so map/status/tasks sent back-to-back can race on startup.
 export SIM_BOOTSTRAP_MAP_WAIT_SEC="${SIM_BOOTSTRAP_MAP_WAIT_SEC:-1.5}"
-# Subtask dwell durations (ms) to test static-release behavior.
-export SIM_SUBTASK_PICKUP_DURATION_MS="${SIM_SUBTASK_PICKUP_DURATION_MS:-6000}"
-export SIM_SUBTASK_DROPOFF_DURATION_MS="${SIM_SUBTASK_DROPOFF_DURATION_MS:-6000}"
-export SIM_SUBTASK_WAYPOINT_DURATION_MS="${SIM_SUBTASK_WAYPOINT_DURATION_MS:-6000}"
+# Subtask dwell durations (ms). Keep short by default so run_all focuses on traffic flow, not station waits.
+export SIM_SUBTASK_PICKUP_DURATION_MS="${SIM_SUBTASK_PICKUP_DURATION_MS:-1000}"
+export SIM_SUBTASK_DROPOFF_DURATION_MS="${SIM_SUBTASK_DROPOFF_DURATION_MS:-1000}"
+export SIM_SUBTASK_WAYPOINT_DURATION_MS="${SIM_SUBTASK_WAYPOINT_DURATION_MS:-1000}"
 # Pika heartbeat tuning (avoid heartbeat timeout under heavy load).
 export AMQP_HEARTBEAT="${AMQP_HEARTBEAT:-120}"
 export AMQP_BLOCKED_TIMEOUT="${AMQP_BLOCKED_TIMEOUT:-60}"
@@ -174,6 +174,9 @@ SIM_ASSIGNED_TRAIL_INTERVAL="${SIM_ASSIGNED_TRAIL_INTERVAL:-0.5}"
 # Simulator motion: when using rolling trail windows, treat the last trail point as lookahead by default (smoother).
 SIM_TRAIL_END_STOP="${SIM_TRAIL_END_STOP:-0}"
 export SIM_TRAIL_END_STOP
+# Do not stop-and-spin for tiny heading changes in the default simulation profile.
+export SIM_TURN_STOP_ANGLE_DEG="${SIM_TURN_STOP_ANGLE_DEG:-30}"
+export SIM_TURN_MIN_TIME_S="${SIM_TURN_MIN_TIME_S:-0.1}"
 SIM_NO_VIS="${SIM_NO_VIS:-0}"
 # Round-robin task binding removed — allocation algorithm handles assignment.
 

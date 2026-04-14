@@ -10389,10 +10389,10 @@ static double fast_neighborhood_threshold_mm() {
     }
     double thresholdM = getenv_double("FAST_NEIGHBORHOOD_M", -1.0);
     if (!std::isfinite(thresholdM) || thresholdM < 0.0) {
-        thresholdM = getenv_double("RESERVE_NEAR_CONFLICT_M", 3.0);
+        thresholdM = getenv_double("RESERVE_NEAR_CONFLICT_M", 0.49);
     }
     if (!std::isfinite(thresholdM) || thresholdM < 0.0) {
-        thresholdM = 3.0;
+        thresholdM = 0.49;
     }
     return thresholdM * 1000.0;
 }
